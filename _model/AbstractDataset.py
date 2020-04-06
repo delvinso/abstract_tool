@@ -2,9 +2,10 @@ import torch
 import pandas as pd
 import numpy as np
 from torch.utils import data
+from keras.preprocessing.sequence import pad_sequences
 
 class AbstractDataset(data.Dataset):
-  def __init__(self, data,  list_IDs: list, labels: dict):
+  def __init__(self, data, list_IDs: list, labels: dict, max_len: int=128):
         """Create custom torch Dataset.
         
         Arguments:
@@ -16,6 +17,7 @@ class AbstractDataset(data.Dataset):
             X, y -- data and label.
         """
         self.data = data
+        self.max_len = max_len
         self.labels = labels
         self.list_IDs = list_IDs
 
@@ -28,6 +30,8 @@ class AbstractDataset(data.Dataset):
 
         # Load data and get label
         X = self.data[self.data[0] == ID][1].values
-        y = self.labels[ID]
-        print(X, type(X))
+        X = pad_sequences(X, maxlen=self.max_len, dtype="long", truncating="post", padding="post")
+
+        y = np.reshape(self.labels[ID], (1,1))
+        
         return torch.Tensor(X), torch.Tensor(y)

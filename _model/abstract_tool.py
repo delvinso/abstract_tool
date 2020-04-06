@@ -25,8 +25,10 @@ def load_data(csv_file: str, tokenizer, max_len: int=128, partition: dict=None, 
         torch.utils.data.Dataset -- dataset
     """
     np.random.seed(2020)
-
+    
+    # columns: [0] unique ID, [1] text, [2] label
     dataset = pd.read_csv(csv_file, header=None, sep='\t')
+
     # create list of train/valid IDs if not provided
     if not partition and not labels: 
         ids = list(dataset.iloc[:,0])
@@ -41,32 +43,39 @@ def load_data(csv_file: str, tokenizer, max_len: int=128, partition: dict=None, 
             labels[i] = dataset.iloc[i][2]
 
     # set parameters for DataLoader -- num_workers = cores
-    params = {'batch_size': 8,
+    params = {'batch_size': 4,
               'shuffle': True,
-              'num_workers': 2
+              'num_workers': 4
              }
 
-    # TODO: pad, and create attention_masks
+    # tokenize, add [CLS], [SEP], **pad if necessary (in data loading function)***
     dataset[1] = dataset[1].apply(lambda x: tokenizer.encode(x, add_special_tokens=True))
+
+    # TODO: create attention mask (to indicate padding or no padding)
+    # mask = [] 
+
+    # for seq in dataset[1].tolist():
+    #     seq_mask = [float(i>0) for i in seq]
+    #     attention_masks.append(seq_mask)
+
     train_data = dataset[dataset[0].isin(partition['train'])]
     valid_data = dataset[dataset[0].isin(partition['valid'])]
 
     # create train/valid generators
-    training_set = AbstractDataset(train_data, partition['train'], labels)
+    training_set = AbstractDataset(train_data, partition['train'], labels, max_len)
     training_generator = DataLoader(training_set, **params)
 
 
-    validation_set = AbstractDataset(valid_data, partition['valid'], labels)
+    validation_set = AbstractDataset(valid_data, partition['valid'], labels,  max_len)
     validation_generator = DataLoader(validation_set, **params)
 
     return training_generator, validation_generator
 
-
 def main():
-    ## TODO: json file for args 
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda:0" if use_cuda else "cpu")
  
+    ## TODO: json file for args 
     FILE = '/Users/chantal/Desktop/systematic_review/abstract_tool/data/cleaned_data/Scaling_data.tsv'
     MAX_EPOCHS = 50
     MAX_LEN = 128
@@ -84,6 +93,7 @@ def main():
         for local_batch, local_labels in training_generator:
             # Transfer to GPU if necessary
             local_batch, local_labels = local_batch.to(device), local_labels.to(device)
+            
 
             # Model computations
             
@@ -100,7 +110,6 @@ def main():
 
 if __name__ == '__main__':
     main()
-
 
 
 
