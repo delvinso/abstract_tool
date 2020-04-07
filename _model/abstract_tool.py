@@ -53,7 +53,7 @@ def load_data(csv_file: str, tokenizer, max_len: int=128, partition: dict=None, 
             labels[i] = dataset.iloc[i][2]
 
     # set parameters for DataLoader -- num_workers = cores
-    params = {'batch_size': 4,
+    params = {'batch_size': 1,
               'shuffle': True,
               'num_workers': 4
              }
@@ -168,7 +168,7 @@ def main():
             optimizer.step()
             scheduler.step()
         
-        avg_train_loss = total_train_loss / len(train_generator)
+        avg_train_loss = total_train_loss / len(training_generator)
         logger.info(f"  Average training loss: {avg_train_loss:.2f}") 
 
         ########################## Validation ##########################
