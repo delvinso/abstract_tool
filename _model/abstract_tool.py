@@ -1,28 +1,33 @@
+import io
 import torch
+import logging
+import json
+import argparse
+from pprint import pprint
+
+# 3rd party libraries
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 from keras.preprocessing.sequence import pad_sequences
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import precision_recall_curve, f1_score, roc_auc_score, auc, average_precision_score, precision_score, recall_score
 from transformers import *
 from tqdm import tqdm, trange
 from torch.nn import CrossEntropyLoss
 import pandas as pd
-import io
 import numpy as np
 import matplotlib.pyplot as plt
-from AbstractDataset import AbstractDataset
-from pprint import pprint
-import logging
 
-''' TODO: 
+# custom
+from AbstractDataset import AbstractDataset
+
+''' TODO:
     - add other models for comparison, set up different structure on top of BERT (e.g., use AutoModel+torch.nn instead of BERTForSequenceClassification)
-    - remove hardcoded params
-    - save/load trained model function
     - plot loss with tensorboard
     - testing function
-    - Lines 55, 64, 106, 145, 150
+    - OTHER TODO: line 55, 64, 106, 145, 150
 '''
 
-def load_data(csv_file: str, tokenizer, max_len: int=128, partition: dict=None, labels: dict=None):
+def load_data(csv_file, tokenizer, max_len: int=128, partition: dict=None, labels: dict=None):
     """Load data using PyTorch DataLoader.
 
     Keyword Arguments:
@@ -82,34 +87,57 @@ def load_data(csv_file: str, tokenizer, max_len: int=128, partition: dict=None, 
 
     return training_generator, validation_generator
 
-def flat_accuracy(preds: list, labels: list):
-    """ Accuracy between predictions and labels.
+
+def metrics(metric_type: str, preds: list, labels: list):
+    """ Provides various metrics between predictions and labels.
     
     Arguments:
+        metric_type {str} -- type of metric to use ['flat_accuracy', 'f1', 'roc_auc', 'precision', 'recall']
         preds {list} -- predictions.
         labels {list} -- labels.
     
     Returns:
         int -- prediction accuracy
     """    
-    pred_flat = np.argmax(preds, axis=1).flatten()
-    labels_flat = labels.flatten()
-    return np.sum(pred_flat == labels_flat) / len(labels_flat)
+    assert metric_type in ['flat_accuracy', 'f1', 'roc_auc'], 'Metrics must be one of the following: [\'flat_accuracy\', \'f1\', \'roc_auc\'] \
+                            \'precision\', \'recall\']'
+
+    if metric_type == 'flat_accuracy':
+        pred_flat = np.argmax(preds, axis=1).flatten()
+        labels_flat = labels.flatten()
+        return np.sum(pred_flat == labels_flat) / len(labels_flat)
+    elif metric_type == 'f1':
+        return f1_score(labels, preds)
+    elif metric_type == 'roc_auc':
+        return roc_auc_score(labels, preds)
+    elif metric_type == 'precision':
+        return precision_score(labels, preds)
+    elif metric_type == 'recall': 
+        return recall_score(labels, preds)
+
+
 
 def main():
-    # setting up logger
-    # logging.basicConfig(filename='example.log', filemode='w', level=logging.DEBUG)
+    # logging.basicConfig(filename='example.log', filemode='w', level=logging.DEBUG) # if you want to pipe the logging to a file
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
 
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda:0" if use_cuda else "cpu")
- 
-    ## TODO: json file for args 
-    FILE = '/Users/chantal/Desktop/systematic_review/abstract_tool/data/cleaned_data/Scaling_data.tsv'
-    MAX_EPOCHS = 10
-    MAX_LEN = 128
-    SEED = 2020
+    
+    # set up parser
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config_dir', help='path to the json config file')
+    args = parser.parse_args()
+
+    with open(args.config_dir) as f:
+        config = json.load(f)
+
+    FILE = config['file']
+    TYPE = FILE.split('/')[-1][:-4] # retrieve file name without the extension
+    MAX_EPOCHS = config['epochs']
+    MAX_LEN = config['max_len']
+    SEED = config['seed']
 
     # setting up seeds
     np.random.seed(SEED)
@@ -131,6 +159,7 @@ def main():
     params = list(model.named_parameters())
 
     optimizer = AdamW(model.parameters(), lr = 2e-5, eps = 1e-8)
+
     # total steps: [number of batches] x [number of epochs]
     total_steps = len(training_generator) * MAX_EPOCHS
     scheduler = get_linear_schedule_with_warmup(optimizer, 
@@ -174,14 +203,20 @@ def main():
         ########################## Validation ##########################
         model.eval()
 
+        # various accuracy measures
         total_eval_accuracy = 0
+        total_eval_f1 = 0 
+        total_eval_roc_auc = 0
+        total_eval_precision = 0
+        total_eval_recall = 0
         total_eval_loss = 0
         nb_eval_steps = 0
 
         with torch.set_grad_enabled(False):
             logger.info(' Validating')
             for local_batch, local_labels in tqdm(validation_generator):
-                local_batch, local_labels = local_batch.to(device).long().cpu(), local_labels.to(device).long().cpu()
+                local_batch, local_labels = local_batch.to(device).long().cpu().squeeze(1), \
+                                            local_labels.to(device).long().cpu()
 
                 output = model(local_batch)  
 
@@ -195,13 +230,32 @@ def main():
                 logits = logits.detach().cpu().numpy()
                 label_ids = local_labels.to('cpu').numpy()     
 
-                total_eval_accuracy += flat_accuracy(logits, label_ids)   
-
+                total_eval_accuracy += metrics('flat_accuracy', logits, label_ids)  
+                total_eval_f1 += metrics('f1', logits, label_ids)
+                total_eval_roc_auc += ('roc_auc', logits, label_ids) 
+                total_eval_precision +=  ('precision', logits, label_ids) 
+                total_eval_recall += ('recall', logits, label_ids) 
+       
+        # TODO: clean this up
         avg_val_accuracy = total_eval_accuracy / len(validation_generator)
-        logger.info(f"  Accuracy: {avg_val_accuracy:.2f}")
+        avg_f1 = total_eval_f1 / len(validation_generator)
+        avg_roc_auc = total_eval_roc_auc / len(validation_generator)
+        avg_precision = total_eval_precision / len(validation_generator)
+        avg_recall = total_eval_recall / len(validation_generator)
+
+        logger.info(f"  Accuracy: {avg_val_accuracy:.2f}\n \
+                        F1 Score: {avg_val_accuracy:.2f}\n \
+                        ROC_AUC Score: {avg_val_accuracy:.2f}\n \
+                        Precision: {avg_val_accuracy:.2f}\n \
+                        Recall: {avg_val_accuracy:.2f}\n")
 
         avg_val_loss = total_eval_loss / len(validation_generator)
         logger.info(f"  Validation Loss: {avg_val_loss:.2f}")
+
+        # save the model 
+        model.save_state_dict('scibert_'+TYPE+'.pt')
+
+
                 
 
 

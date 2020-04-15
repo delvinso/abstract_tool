@@ -1,0 +1,8 @@
+
+    {
+        "file" = "/Users/chantal/Desktop/systematic_review/abstract_tool/data/cleaned_data/Scaling_data.tsv",
+        "epochs" = 5, 
+        "max_len" = 128,
+        "seed" = 2020,
+    }
+
