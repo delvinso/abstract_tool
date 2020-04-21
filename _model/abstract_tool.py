@@ -16,7 +16,8 @@ from torch.nn import CrossEntropyLoss
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-
+import matplotlib
+matplotlib.use('Agg')
 # custom
 from AbstractDataset import AbstractDataset
 
@@ -40,12 +41,14 @@ def load_data(csv_file, tokenizer, max_len: int=128, partition: dict=None, label
     Returns:
         torch.utils.data.Dataset -- dataset
     """
-    
+
     # columns: [0] unique ID, [1] text, [2] label
     dataset = pd.read_csv(csv_file, header=None, sep='\t')
-
+    # dataset = dataset.sample(frac = 0.1, axis = 0)
+    print(dataset.head())
+    print(dataset.shape)
     # create list of train/valid IDs if not provided
-    if not partition and not labels: 
+    if not partition and not labels:
         ids = list(dataset.iloc[:,0])
         total_len = len(ids)
         np.random.shuffle(ids)
@@ -53,22 +56,23 @@ def load_data(csv_file, tokenizer, max_len: int=128, partition: dict=None, label
         labels = {}
         partition = {'train': ids[ :int(total_len*0.7)],
                      'valid': ids[int(total_len*0.7): ]
-                    }
+                     }
         for i in dataset.iloc[:,0]:
+
             labels[i] = dataset.iloc[i][2]
 
     # set parameters for DataLoader -- num_workers = cores
-    params = {'batch_size': 1,
+    params = {'batch_size': 32,
               'shuffle': True,
-              'num_workers': 4
-             }
+              'num_workers': 16
+              }
 
     ### NOTE: the tokenizer.encocde_plus function does the token/special/map/padding/attention all in one go
 
     dataset[1] = dataset[1].apply(lambda x: tokenizer.encode(x, add_special_tokens=True))
 
     # TODO: create attention mask (to indicate padding or no padding)
-    # mask = [] 
+    # mask = []
 
     # for seq in dataset[1].tolist():
     #     seq_mask = [float(i>0) for i in seq]
@@ -90,17 +94,19 @@ def load_data(csv_file, tokenizer, max_len: int=128, partition: dict=None, label
 
 def metrics(metric_type: str, preds: list, labels: list):
     """ Provides various metrics between predictions and labels.
-    
+
     Arguments:
         metric_type {str} -- type of metric to use ['flat_accuracy', 'f1', 'roc_auc', 'precision', 'recall']
         preds {list} -- predictions.
         labels {list} -- labels.
-    
+
     Returns:
         int -- prediction accuracy
-    """    
-    assert metric_type in ['flat_accuracy', 'f1', 'roc_auc'], 'Metrics must be one of the following: [\'flat_accuracy\', \'f1\', \'roc_auc\'] \
-                            \'precision\', \'recall\']'
+    """
+    assert metric_type in ['flat_accuracy', 'f1', 'roc_auc', 'ap'], 'Metrics must be one of the following: [\'flat_accuracy\', \'f1\', \'roc_auc\'] \
+                            \'precision\', \'recall\', \'ap\']'
+    labels = np.concatenate(labels)
+    # preds = np.concatenate(np.asarray(preds))
 
     if metric_type == 'flat_accuracy':
         pred_flat = np.argmax(preds, axis=1).flatten()
@@ -112,8 +118,10 @@ def metrics(metric_type: str, preds: list, labels: list):
         return roc_auc_score(labels, preds)
     elif metric_type == 'precision':
         return precision_score(labels, preds)
-    elif metric_type == 'recall': 
+    elif metric_type == 'recall':
         return recall_score(labels, preds)
+    elif metric_type == 'ap':
+        return average_precision_score(labels, preds)
 
 
 
@@ -124,7 +132,7 @@ def main():
 
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda:0" if use_cuda else "cpu")
-    
+
     # set up parser
     parser = argparse.ArgumentParser()
     parser.add_argument('--config_dir', help='path to the json config file')
@@ -148,7 +156,13 @@ def main():
     pretrained_weights = 'allenai/scibert_scivocab_uncased'
     tokenizer = BertTokenizer.from_pretrained('allenai/scibert_scivocab_uncased')
     model = BertForSequenceClassification.from_pretrained('allenai/scibert_scivocab_uncased')
+
+    if torch.cuda.device_count() > 1:
+        print("GPUs Available: ", torch.cuda.device_count())
+        model = torch.nn.DataParallel(model, device_ids=[0, 1, 2])
+
     model.to(device)
+
 
     # load data
     training_generator, validation_generator = load_data(FILE, tokenizer, MAX_LEN)
@@ -162,8 +176,8 @@ def main():
 
     # total steps: [number of batches] x [number of epochs]
     total_steps = len(training_generator) * MAX_EPOCHS
-    scheduler = get_linear_schedule_with_warmup(optimizer, 
-                                                num_warmup_steps = 0, 
+    scheduler = get_linear_schedule_with_warmup(optimizer,
+                                                num_warmup_steps = 0,
                                                 num_training_steps = total_steps)
 
     for epoch in range(MAX_EPOCHS):
@@ -172,21 +186,27 @@ def main():
         ########################## Training ##########################
         logger.info(' Training')
         total_train_loss = 0
+        labels_list = []
+        preds_list = []
+        total_train_roc_auc = 0
 
-        model.train()
-        for local_batch, local_labels in tqdm(training_generator):
+
+        model.train().to(device)
+        i = 0 # enumerate?
+        for local_batch, local_labels in (training_generator):
             # TODO: remove .cpu() when running on GPU, adding in "channel" dim at pos -1
-            local_batch, local_labels = local_batch.to(device).long().cpu().squeeze(1), \
-                                        local_labels.to(device).long().cpu()
+            local_batch, local_labels = local_batch.to(device).long().squeeze(1), \
+                                        local_labels.to(device).long()
 
             model.zero_grad()
             # TODO: attention mask None for now
 
             output = model(local_batch)
             logits = output[0]
-            
+
             loss_fct = CrossEntropyLoss()
-            loss = loss_fct(logits.view(-1, 2), local_labels.view(-1)) 
+            # print(logits.view(-1, 2))
+            loss = loss_fct(logits.view(-1, 2), local_labels.view(-1))
 
 
             total_train_loss += loss.item()
@@ -196,67 +216,112 @@ def main():
 
             optimizer.step()
             scheduler.step()
-        
+
+            logits = torch.softmax(logits, dim = 1)
+            logits = logits.detach().cpu().numpy()
+
+            for i in range(logits.shape[0]):
+                preds = logits[i][1] # get p(y == 1) from each sample
+                preds_list.append(preds)
+            # print(local_labels.detach().cpu().numpy())
+            label_ids = local_labels.detach().cpu().numpy().flatten()#[0]
+            labels_list.append(label_ids)
+            # total_eval_f1 += metrics('f1', logits, label_ids)
+            if ((i % 10 == 0) & (i > 0)):
+                # print(labels_list)
+                # print(preds_list)
+
+                running_roc_auc = metrics('roc_auc', preds = preds_list, labels = labels_list)
+                running_ap = metrics('ap', preds = preds_list, labels = labels_list)
+                logging.info('Training Batch: {}, AUC: {:3f}, AP {:3f}'.format(i, running_roc_auc, running_ap))
+                # print(label_ids)
+                # print(logits)
+            i = i + 1
+
         avg_train_loss = total_train_loss / len(training_generator)
-        logger.info(f"  Average training loss: {avg_train_loss:.2f}") 
+        total_train_roc_auc = metrics('roc_auc', preds = preds_list, labels = labels_list)
+        total_train_ap = metrics('ap', preds = preds_list, labels = labels_list)
+        logger.info(f"  Average training loss: {avg_train_loss:.3f}, Training AUC: {total_train_roc_auc:.3f}, AP: {total_train_ap:.3f}")
+
+
 
         ########################## Validation ##########################
-        model.eval()
+        model.eval().to(device)
 
         # various accuracy measures
         total_eval_accuracy = 0
-        total_eval_f1 = 0 
+        total_eval_f1 = 0
         total_eval_roc_auc = 0
         total_eval_precision = 0
         total_eval_recall = 0
         total_eval_loss = 0
         nb_eval_steps = 0
+        labels_list = []
+        preds_list = []
 
         with torch.set_grad_enabled(False):
             logger.info(' Validating')
-            for local_batch, local_labels in tqdm(validation_generator):
-                local_batch, local_labels = local_batch.to(device).long().cpu().squeeze(1), \
-                                            local_labels.to(device).long().cpu()
+            i = 0 # enumerate instead?
+            for local_batch, local_labels in (validation_generator):
+                local_batch, local_labels = local_batch.to(device).long().squeeze(1), \
+                                            local_labels.to(device).long()
 
-                output = model(local_batch)  
-
+                output = model(local_batch)
                 logits = output[0]
 
                 loss_fct = CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, 2), local_labels.view(-1)) 
+                loss = loss_fct(logits.view(-1, 2), local_labels.view(-1))
 
-                total_eval_loss += loss.item()  
-                       
+                total_eval_loss += loss.item()
+
+                logits = torch.softmax(logits, dim = 1)
                 logits = logits.detach().cpu().numpy()
-                label_ids = local_labels.to('cpu').numpy()     
 
-                total_eval_accuracy += metrics('flat_accuracy', logits, label_ids)  
-                total_eval_f1 += metrics('f1', logits, label_ids)
-                total_eval_roc_auc += ('roc_auc', logits, label_ids) 
-                total_eval_precision +=  ('precision', logits, label_ids) 
-                total_eval_recall += ('recall', logits, label_ids) 
-       
+                label_ids = local_labels.detach().cpu().numpy().flatten()#[0]
+                # don't take the probabilities yet because the accuracy function takes the argmax
+                # total_eval_accuracy += metrics('flat_accuracy', logits, label_ids)
+
+                for i in range(logits.shape[0]):
+                    preds = logits[i][1] # get p(y == 1) from each sample
+                    preds_list.append(preds)
+                labels_list.append(label_ids)
+
+
+                # total_eval_f1 += metrics('f1', logits, label_ids)
+                if ((i % 10 == 0) & (i > 0)):
+                    # print(labels_list)
+                    # print(preds_list)
+                    running_roc_auc = metrics('roc_auc', preds = preds_list, labels = labels_list)
+                    running_ap = metrics('ap', preds = preds_list, labels = labels_list)
+                    logging.info('Validation Batch: {}, AUC: {:3f}, AP {:3f}'.format(i, running_roc_auc, running_ap))
+                i = i + 1
+
+                # total_eval_precision +=  metrics('precision', logits, label_ids)
+                # total_eval_recall += metrics('recall', logits, label_ids)
+        total_eval_roc_auc = metrics('roc_auc', preds = preds_list, labels = labels_list)
         # TODO: clean this up
-        avg_val_accuracy = total_eval_accuracy / len(validation_generator)
-        avg_f1 = total_eval_f1 / len(validation_generator)
+        # avg_val_accuracy = total_eval_accuracy / len(validation_generator) # no good w/ logits
+        # avg_f1 = total_eval_f1 / len(validation_generator)
         avg_roc_auc = total_eval_roc_auc / len(validation_generator)
-        avg_precision = total_eval_precision / len(validation_generator)
-        avg_recall = total_eval_recall / len(validation_generator)
+        # avg_precision = total_eval_precision / len(validation_generator)
+        # avg_recall = total_eval_recall / len(validation_generator)
+        # logger.info(f"  Accuracy: {avg_val_accuracy:.2f}\n \
+        #                 F1 Score: {avg_f1:.2f}\n \
+        #                 ROC_AUC Score: {avg_roc_auc:.2f}\n \
+        #                 Precision: {avg_precision:.2f}\n \
+        #                 Recall: {avg_recall:.2f}\n")
 
-        logger.info(f"  Accuracy: {avg_val_accuracy:.2f}\n \
-                        F1 Score: {avg_val_accuracy:.2f}\n \
-                        ROC_AUC Score: {avg_val_accuracy:.2f}\n \
-                        Precision: {avg_val_accuracy:.2f}\n \
-                        Recall: {avg_val_accuracy:.2f}\n")
+        # logger.info(f"ROC_AUC: {avg_roc_auc:.2f}")
 
         avg_val_loss = total_eval_loss / len(validation_generator)
-        logger.info(f"  Validation Loss: {avg_val_loss:.2f}")
-
+        total_roc_auc = metrics('roc_auc', preds = preds_list, labels = labels_list)
+        total_ap = metrics('ap', preds = preds_list, labels = labels_list)
+        logger.info(f"  Average validation loss: {avg_val_loss:.3f}, Validation AUC: {total_roc_auc:.3f}, AP: {total_ap:.3f}")
         # save the model 
-        model.save_state_dict('scibert_'+TYPE+'.pt')
+        # model.module.save_state_dict('scibert_'+TYPE+'.pt')
 
 
-                
+
 
 
 if __name__ == '__main__':
