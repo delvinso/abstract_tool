@@ -18,6 +18,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')
+
 # custom
 from AbstractDataset import AbstractDataset
 
@@ -122,7 +123,6 @@ def metrics(metric_type: str, preds: list, labels: list):
         return recall_score(labels, preds)
     elif metric_type == 'ap':
         return average_precision_score(labels, preds)
-
 
 
 def main():
@@ -277,9 +277,7 @@ def main():
                 logits = torch.softmax(logits, dim = 1)
                 logits = logits.detach().cpu().numpy()
 
-                label_ids = local_labels.detach().cpu().numpy().flatten()#[0]
-                # don't take the probabilities yet because the accuracy function takes the argmax
-                # total_eval_accuracy += metrics('flat_accuracy', logits, label_ids)
+                label_ids = local_labels.detach().cpu().numpy().flatten()
 
                 for i in range(logits.shape[0]):
                     preds = logits[i][1] # get p(y == 1) from each sample
@@ -296,30 +294,17 @@ def main():
                     logging.info('Validation Batch: {}, AUC: {:3f}, AP {:3f}'.format(i, running_roc_auc, running_ap))
                 i = i + 1
 
-                # total_eval_precision +=  metrics('precision', logits, label_ids)
-                # total_eval_recall += metrics('recall', logits, label_ids)
         total_eval_roc_auc = metrics('roc_auc', preds = preds_list, labels = labels_list)
-        # TODO: clean this up
-        # avg_val_accuracy = total_eval_accuracy / len(validation_generator) # no good w/ logits
-        # avg_f1 = total_eval_f1 / len(validation_generator)
         avg_roc_auc = total_eval_roc_auc / len(validation_generator)
-        # avg_precision = total_eval_precision / len(validation_generator)
-        # avg_recall = total_eval_recall / len(validation_generator)
-        # logger.info(f"  Accuracy: {avg_val_accuracy:.2f}\n \
-        #                 F1 Score: {avg_f1:.2f}\n \
-        #                 ROC_AUC Score: {avg_roc_auc:.2f}\n \
-        #                 Precision: {avg_precision:.2f}\n \
-        #                 Recall: {avg_recall:.2f}\n")
 
-        # logger.info(f"ROC_AUC: {avg_roc_auc:.2f}")
 
         avg_val_loss = total_eval_loss / len(validation_generator)
         total_roc_auc = metrics('roc_auc', preds = preds_list, labels = labels_list)
         total_ap = metrics('ap', preds = preds_list, labels = labels_list)
         logger.info(f"  Average validation loss: {avg_val_loss:.3f}, Validation AUC: {total_roc_auc:.3f}, AP: {total_ap:.3f}")
+        
         # save the model 
         # model.module.save_state_dict('scibert_'+TYPE+'.pt')
-
 
 
 
