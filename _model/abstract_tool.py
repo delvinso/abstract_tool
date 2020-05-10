@@ -21,13 +21,7 @@ matplotlib.use('Agg')
 
 # custom
 from AbstractDataset import AbstractDataset
-
-''' TODO:
-    - add other models for comparison, set up different structure on top of BERT (e.g., use AutoModel+torch.nn instead of BERTForSequenceClassification)
-    - plot loss with tensorboard
-    - testing function
-    - OTHER TODO: line 55, 64, 106, 145, 150
-'''
+from BertForAbstractScreening import BertForAbstractScreening
 
 def load_data(csv_file, tokenizer, max_len: int=128, partition: dict=None, labels: dict=None):
     """Load data using PyTorch DataLoader.
@@ -43,11 +37,9 @@ def load_data(csv_file, tokenizer, max_len: int=128, partition: dict=None, label
         torch.utils.data.Dataset -- dataset
     """
 
-    # columns: [0] unique ID, [1] text, [2] label
+    # columns: [0] unique ID, [1] text, [2] label, [3] metadata 
     dataset = pd.read_csv(csv_file, header=None, sep='\t')
-    # dataset = dataset.sample(frac = 0.1, axis = 0)
-    print(dataset.head())
-    print(dataset.shape)
+
     # create list of train/valid IDs if not provided
     if not partition and not labels:
         ids = list(dataset.iloc[:,0])
@@ -55,12 +47,14 @@ def load_data(csv_file, tokenizer, max_len: int=128, partition: dict=None, label
         np.random.shuffle(ids)
 
         labels = {}
+        # metadata = {}
+    
         partition = {'train': ids[ :int(total_len*0.7)],
                      'valid': ids[int(total_len*0.7): ]
                      }
         for i in dataset.iloc[:,0]:
-
             labels[i] = dataset.iloc[i][2]
+            # metadata[i] = dataset.iloc[i][3]
 
     # set parameters for DataLoader -- num_workers = cores
     params = {'batch_size': 32,
@@ -68,9 +62,8 @@ def load_data(csv_file, tokenizer, max_len: int=128, partition: dict=None, label
               'num_workers': 16
               }
 
-    ### NOTE: the tokenizer.encocde_plus function does the token/special/map/padding/attention all in one go
-
-    dataset[1] = dataset[1].apply(lambda x: tokenizer.encode(x, add_special_tokens=True))
+    # NOTE: the tokenizer.encocde_plus function does the token/special/map/padding/attention all in one go
+    dataset[1] = dataset[1].apply(lambda x: tokenizer.encode_plus(x, add_special_tokens=True))
 
     # TODO: create attention mask (to indicate padding or no padding)
     # mask = []
@@ -104,8 +97,9 @@ def metrics(metric_type: str, preds: list, labels: list):
     Returns:
         int -- prediction accuracy
     """
-    assert metric_type in ['flat_accuracy', 'f1', 'roc_auc', 'ap'], 'Metrics must be one of the following: [\'flat_accuracy\', \'f1\', \'roc_auc\'] \
-                            \'precision\', \'recall\', \'ap\']'
+    assert metric_type in ['flat_accuracy', 'f1', 'roc_auc', 'ap'], 'Metrics must be one of the following: \
+                                                                    [\'flat_accuracy\', \'f1\', \'roc_auc\'] \
+                                                                    \'precision\', \'recall\', \'ap\']'
     labels = np.concatenate(labels)
     # preds = np.concatenate(np.asarray(preds))
 
@@ -152,7 +146,7 @@ def main():
     torch.manual_seed(SEED)
     # torch.cuda.manual_seed_all(SEED)
 
-    # BERT-specific variables, load model + tokenizer, using pretrained SciBERT
+    # load model + tokenizer, using pretrained SciBERT
     pretrained_weights = 'allenai/scibert_scivocab_uncased'
     tokenizer = BertTokenizer.from_pretrained('allenai/scibert_scivocab_uncased')
     model = BertForSequenceClassification.from_pretrained('allenai/scibert_scivocab_uncased')
@@ -162,7 +156,6 @@ def main():
         model = torch.nn.DataParallel(model, device_ids=[0, 1, 2])
 
     model.to(device)
-
 
     # load data
     training_generator, validation_generator = load_data(FILE, tokenizer, MAX_LEN)
@@ -192,14 +185,13 @@ def main():
 
 
         model.train().to(device)
-        i = 0 # enumerate?
-        for local_batch, local_labels in (training_generator):
-            # TODO: remove .cpu() when running on GPU, adding in "channel" dim at pos -1
+
+        for idx, local_batch, local_labels in enumerate(training_generator):
+            # NOTE: remove .cpu() when running on GPU, adding in "channel" dim at pos -1
             local_batch, local_labels = local_batch.to(device).long().squeeze(1), \
                                         local_labels.to(device).long()
 
             model.zero_grad()
-            # TODO: attention mask None for now
 
             output = model(local_batch)
             logits = output[0]
@@ -226,24 +218,19 @@ def main():
             # print(local_labels.detach().cpu().numpy())
             label_ids = local_labels.detach().cpu().numpy().flatten()#[0]
             labels_list.append(label_ids)
-            # total_eval_f1 += metrics('f1', logits, label_ids)
-            if ((i % 10 == 0) & (i > 0)):
-                # print(labels_list)
-                # print(preds_list)
 
+            if ((idx % 10 == 0) & (idx > 0)):
                 running_roc_auc = metrics('roc_auc', preds = preds_list, labels = labels_list)
                 running_ap = metrics('ap', preds = preds_list, labels = labels_list)
                 logging.info('Training Batch: {}, AUC: {:3f}, AP {:3f}'.format(i, running_roc_auc, running_ap))
                 # print(label_ids)
                 # print(logits)
-            i = i + 1
+            
 
         avg_train_loss = total_train_loss / len(training_generator)
         total_train_roc_auc = metrics('roc_auc', preds = preds_list, labels = labels_list)
         total_train_ap = metrics('ap', preds = preds_list, labels = labels_list)
         logger.info(f"  Average training loss: {avg_train_loss:.3f}, Training AUC: {total_train_roc_auc:.3f}, AP: {total_train_ap:.3f}")
-
-
 
         ########################## Validation ##########################
         model.eval().to(device)
@@ -261,8 +248,8 @@ def main():
 
         with torch.set_grad_enabled(False):
             logger.info(' Validating')
-            i = 0 # enumerate instead?
-            for local_batch, local_labels in (validation_generator):
+
+            for idx, local_batch, local_labels in enumerate(validation_generator):
                 local_batch, local_labels = local_batch.to(device).long().squeeze(1), \
                                             local_labels.to(device).long()
 
@@ -286,13 +273,13 @@ def main():
 
 
                 # total_eval_f1 += metrics('f1', logits, label_ids)
-                if ((i % 10 == 0) & (i > 0)):
+                if ((idx % 10 == 0) & (idx > 0)):
                     # print(labels_list)
                     # print(preds_list)
                     running_roc_auc = metrics('roc_auc', preds = preds_list, labels = labels_list)
                     running_ap = metrics('ap', preds = preds_list, labels = labels_list)
                     logging.info('Validation Batch: {}, AUC: {:3f}, AP {:3f}'.format(i, running_roc_auc, running_ap))
-                i = i + 1
+               
 
         total_eval_roc_auc = metrics('roc_auc', preds = preds_list, labels = labels_list)
         avg_roc_auc = total_eval_roc_auc / len(validation_generator)
@@ -305,8 +292,6 @@ def main():
         
         # save the model 
         # model.module.save_state_dict('scibert_'+TYPE+'.pt')
-
-
 
 
 if __name__ == '__main__':

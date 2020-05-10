@@ -30,7 +30,7 @@ class AbstractDataset(data.Dataset):
 
         # Load data and get label
         X = self.data[self.data[0] == ID][1].values
-        X = pad_sequences(X, maxlen=self.max_len, dtype="long", truncating="post", padding="post")
+        # X = pad_sequences(X, maxlen=self.max_len, dtype="long", truncating="post", padding="post")
 
         y = np.reshape(self.labels[ID], (1,1))
         
