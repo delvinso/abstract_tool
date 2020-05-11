@@ -33,7 +33,7 @@ from AbstractDataset import AbstractDataset
 '''
 
 def load_data(csv_file, tokenizer, max_len: int=512, partition: dict=None, labels: dict=None, sample =  None, pos_frac = None):
-
+    
     """Load data using PyTorch DataLoader.
 
     Keyword Arguments:
@@ -74,7 +74,6 @@ def load_data(csv_file, tokenizer, max_len: int=512, partition: dict=None, label
             pos_ids_sample = resample(pos_ids, n_samples = num_pos_samples, replace = False)
             neg_ids_sample = resample(neg_ids, n_samples = num_neg_samples, replace = False)
 
-
             # print(len(pos_ids_sample))
             # print(len(neg_ids_sample))
 
@@ -94,14 +93,12 @@ def load_data(csv_file, tokenizer, max_len: int=512, partition: dict=None, label
                          'valid': ids[int(total_len*0.7): ]
                          }
 
-
         dataset = dataset[dataset.iloc[:, 0].isin(ids)]
         for i in dataset.iloc[:,0]:
             labels[i] = dataset.loc[i][2] # we use loc to refer to the name now instead of idx
 
         # print(pd.Series(partition['train']))
         # print(pd.Series(partition['valid']))
-
 
     # set parameters for DataLoader -- num_workers = cores
     params = {'batch_size': 18,
@@ -116,7 +113,7 @@ def load_data(csv_file, tokenizer, max_len: int=512, partition: dict=None, label
                                                                  add_special_tokens=True,
                                                                  max_length = max_len,
                                                                  pad_to_max_length=True)) # there's a line in NCDS, 5003,
-        # 'spectrum burn case basaveshwara' that's throwing a ValueError
+                                                                                        # 'spectrum burn case basaveshwara' that's throwing a ValueError
     except ValueError:
         print(dataset[1])
         # dataset[1] = dataset[1].apply(lambda x: tokenizer.encode(torch, add_special_tokens=True, max_length = max_len))
@@ -404,18 +401,7 @@ def main():
 
 
             # TODO: clean this up
-            # avg_val_accuracy = total_eval_accuracy / len(validation_generator) # no good w/ logits
-            # avg_f1 = total_eval_f1 / len(validation_generator)
             avg_roc_auc = total_eval_roc_auc / len(validation_generator)
-            # avg_precision = total_eval_precision / len(validation_generator)
-            # avg_recall = total_eval_recall / len(validation_generator)
-            # logger.info(f"  Accuracy: {avg_val_accuracy:.2f}\n \
-            #                 F1 Score: {avg_f1:.2f}\n \
-            #                 ROC_AUC Score: {avg_roc_auc:.2f}\n \
-            #                 Precision: {avg_precision:.2f}\n \
-            #                 Recall: {avg_recall:.2f}\n")
-
-            # logger.info(f"ROC_AUC: {avg_roc_auc:.2f}")
 
             avg_val_loss = total_eval_loss / len(validation_generator)
             total_roc_auc = metrics('roc_auc', preds = val_preds_list, labels = val_labels_list)
@@ -423,20 +409,11 @@ def main():
             logger.info(f"  Average validation loss: {avg_val_loss:.3f}, Validation AUC: {total_roc_auc:.3f}, AP: {total_ap:.3f}")
             # save the model
             # TODO: add loss check, if < than previous loss save, else do nothing
-
+            
 
             if avg_val_loss < best_eval_loss:
                 best_eval_loss = avg_val_loss
                 logging.info('Best Validation Loss: {}'.format(str(best_eval_loss)))
-
-                # dd = {}
-                # dd['embeddings'] = embeddings_list
-                # dd['ids'] = val_ids_list
-                # dd['labels'] = val_labels_list
-                # # f = f'{TYPE}_sample_{str(SAMPLE)}_run_{str(run)}_epoch_{str(epoch)}_embeddings.p'
-                # f = f'{TYPE}_sample_{str(SAMPLE)}_run_{str(run)}_epoch_{str(epoch)}_embeddings.p'
-                # logging.info('Best Validation Loss: {}, Embeddings saved to {}'.format(str(best_eval_loss), f))
-                # pickle.dump(dd, open(os.path.join('results', f), "wb" ))
 
 
 
@@ -457,7 +434,7 @@ def main():
             epoch_val_labels.append(np.concatenate(val_labels_list))
             epoch_train_labels.append(np.concatenate(labels_list))
 
-        # torch.save(model.state_dict(), ('scibert_'+TYPE+ '_' + str(epoch) +'.pt'))
+            # torch.save(model.state_dict(), ('scibert_'+TYPE+ '_' + str(epoch) +'.pt'))
 
         if runs == 1: break
 
@@ -483,7 +460,7 @@ def main():
         'sample_size': epoch_sample,
         'pos_frac': pos_frac_list
 
-    })
+                       })
 
 
     df['val_preds'] = df['val_preds'].astype(object)
@@ -504,10 +481,6 @@ def main():
     if not os.path.exists(out_res): os.makedirs(out_res)
 
     df.to_csv(os.path.join(out_res, f'{TYPE}_sample_{str(SAMPLE)}_{str(POS_FRAC)}_results.csv'))
-
-
-# TODO - positive fraction sampling
-# TODO - sampling by label
 
 if __name__ == '__main__':
     main()

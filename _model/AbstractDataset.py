@@ -5,7 +5,7 @@ from torch.utils import data
 from keras.preprocessing.sequence import pad_sequences
 
 class AbstractDataset(data.Dataset):
-    def __init__(self, data, list_IDs: list, labels: dict, max_len: int=128):
+  def __init__(self, data, list_IDs: list, labels: dict, max_len: int=128):
         """Create custom torch Dataset.
         
         Arguments:
@@ -21,10 +21,10 @@ class AbstractDataset(data.Dataset):
         self.labels = labels
         self.list_IDs = list_IDs
 
-    def __len__(self):
+  def __len__(self):
         return len(self.list_IDs)
 
-    def __getitem__(self, index):
+  def __getitem__(self, index):
         # Select sample
         ID = self.list_IDs[index]
 
@@ -33,5 +33,5 @@ class AbstractDataset(data.Dataset):
         X = pad_sequences(X, maxlen=self.max_len, dtype="long", truncating="post", padding="post")
 
         y = np.reshape(self.labels[ID], (1,1))
-
+        
         return torch.Tensor(X), torch.Tensor(y), ID
