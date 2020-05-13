@@ -1,3 +1,8 @@
+import torch 
+from transformers import *
+from torch.nn import CrossEntropyLoss
+import numpy as np
+
 class BertForAbstractScreening(nn.Module):
   
     def __init__(self, pretrained_weights: str='bert-base-uncased', num_labels: int=2):
@@ -6,11 +11,11 @@ class BertForAbstractScreening(nn.Module):
         Keyword Arguments:
             pretrained_weights {str} -- pretrained weights to load BERT with (default: {'bert-base-uncased'})
             num_labels {int} -- number of labels for the data (default: {2})
-        """        
-        # inherits from the Sequence Classification model 
+        """          
         super(BertForSequenceClassification, self).__init__()
         self.num_labels = num_labels
-        self.bert = BertModel.from_pretrained(pretrained_weights)
+        # output: last_hidden_state, pooler_output, hidden_states
+        self.bert = BertModel.from_pretrained(pretrained_weights, output_hidden_states=True)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         # can change classifier here 
         self.classifier = nn.Linear(config.hidden_size, num_labels)
@@ -32,8 +37,7 @@ class BertForAbstractScreening(nn.Module):
         Returns:
             torch.tensor -- [description]
         """        
-        # change output_all_encoded_layers to true if I want to extract embeddings 
-        _, pooled_output = self.bert(input_ids, token_type_ids, attention_mask, output_all_encoded_layers=False)
+        _, pooled_output, hidden_states = self.bert(input_ids, token_type_ids, attention_mask)
         pooled_output = self.dropout(pooled_output)
         # send in the augmented embeddings here
         logits = self.classifier(pooled_output)

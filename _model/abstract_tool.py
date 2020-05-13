@@ -79,7 +79,6 @@ def load_data(csv_file, tokenizer, max_len: int=128, partition: dict=None, label
     training_set = AbstractDataset(train_data, partition['train'], labels, max_len)
     training_generator = DataLoader(training_set, **params)
 
-
     validation_set = AbstractDataset(valid_data, partition['valid'], labels,  max_len)
     validation_generator = DataLoader(validation_set, **params)
 
@@ -132,6 +131,7 @@ def main():
     parser.add_argument('--config_dir', help='path to the json config file')
     args = parser.parse_args()
 
+    # model configuration file 
     with open(args.config_dir) as f:
         config = json.load(f)
 
@@ -148,8 +148,9 @@ def main():
 
     # load model + tokenizer, using pretrained SciBERT
     pretrained_weights = 'allenai/scibert_scivocab_uncased'
-    tokenizer = BertTokenizer.from_pretrained('allenai/scibert_scivocab_uncased')
-    model = BertForSequenceClassification.from_pretrained('allenai/scibert_scivocab_uncased')
+    tokenizer = BertTokenizer.from_pretrained(pretrained_weights)
+    # model = BertForSequenceClassification.from_pretrained('allenai/scibert_scivocab_uncased')
+    model = BertForAbstractScreening.from_pretrained(pretrained_weights) 
 
     if torch.cuda.device_count() > 1:
         print("GPUs Available: ", torch.cuda.device_count())
@@ -183,7 +184,6 @@ def main():
         preds_list = []
         total_train_roc_auc = 0
 
-
         model.train().to(device)
 
         for idx, local_batch, local_labels in enumerate(training_generator):
@@ -200,7 +200,6 @@ def main():
             # print(logits.view(-1, 2))
             loss = loss_fct(logits.view(-1, 2), local_labels.view(-1))
 
-
             total_train_loss += loss.item()
             loss.backward()
 
@@ -215,8 +214,9 @@ def main():
             for i in range(logits.shape[0]):
                 preds = logits[i][1] # get p(y == 1) from each sample
                 preds_list.append(preds)
+
             # print(local_labels.detach().cpu().numpy())
-            label_ids = local_labels.detach().cpu().numpy().flatten()#[0]
+            label_ids = local_labels.detach().cpu().numpy().flatten() #[0]
             labels_list.append(label_ids)
 
             if ((idx % 10 == 0) & (idx > 0)):
@@ -230,7 +230,8 @@ def main():
         avg_train_loss = total_train_loss / len(training_generator)
         total_train_roc_auc = metrics('roc_auc', preds = preds_list, labels = labels_list)
         total_train_ap = metrics('ap', preds = preds_list, labels = labels_list)
-        logger.info(f"  Average training loss: {avg_train_loss:.3f}, Training AUC: {total_train_roc_auc:.3f}, AP: {total_train_ap:.3f}")
+        logger.info(f"  Average training loss: {avg_train_loss:.3f}, Training AUC: {total_train_roc_auc:.3f},\
+                        AP: {total_train_ap:.3f}")
 
         ########################## Validation ##########################
         model.eval().to(device)
@@ -288,10 +289,12 @@ def main():
         avg_val_loss = total_eval_loss / len(validation_generator)
         total_roc_auc = metrics('roc_auc', preds = preds_list, labels = labels_list)
         total_ap = metrics('ap', preds = preds_list, labels = labels_list)
-        logger.info(f"  Average validation loss: {avg_val_loss:.3f}, Validation AUC: {total_roc_auc:.3f}, AP: {total_ap:.3f}")
+        logger.info(f"  Average validation loss: {avg_val_loss:.3f}, \
+                        Validation AUC: {total_roc_auc:.3f}, \
+                        AP: {total_ap:.3f}")
         
         # save the model 
-        # model.module.save_state_dict('scibert_'+TYPE+'.pt')
+        model.module.save_state_dict('scibert_'+TYPE+'.pt')
 
 
 if __name__ == '__main__':
