@@ -2,6 +2,8 @@
         "file" : "/home/dso/Documents/Projects/abstract_tool/_model/cleaned_data/Scaling_data.tsv",
         "epochs" : 5, 
         "max_len" : 128,
-        "seed" : 2020
+        "seed" : 2020,
+        "train": true,
+        "clustering_model": "" 
  }
 

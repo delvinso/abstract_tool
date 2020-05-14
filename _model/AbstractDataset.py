@@ -14,7 +14,7 @@ class AbstractDataset(data.Dataset):
             labels {dict} -- Map of data IDs to their labels.
         
         Returns:
-            X, y -- data and label.
+            X,Y,z -- data, metadata, and label.
         """
         self.data = data
         self.max_len = max_len
@@ -30,8 +30,10 @@ class AbstractDataset(data.Dataset):
 
         # Load data and get label
         X = self.data[self.data[0] == ID][1].values
+        Y = self.data[self.data[0] == ID][2].values
+
         # X = pad_sequences(X, maxlen=self.max_len, dtype="long", truncating="post", padding="post")
 
-        y = np.reshape(self.labels[ID], (1,1))
+        z = np.reshape(self.labels[ID], (1,1))
         
-        return torch.Tensor(X), torch.Tensor(y)
+        return torch.Tensor(X), torch.Tensor(Y), torch.Tensor(z)
