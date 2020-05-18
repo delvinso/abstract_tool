@@ -21,7 +21,7 @@ class BertForAbstractScreening(nn.Module):
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.glove = torchtext.vocab.GloVe(name="6B", dim=50)  
 
-        ########### NOTE: add or change classifier on top of BERT here ###########
+        ########### NOTE, optional: add or change classifier on top of BERT here ###########
         # self.classifier = nn.Linear(config.hidden_size, num_labels)
 
         nn.init.xavier_normal_(self.classifier.weight)

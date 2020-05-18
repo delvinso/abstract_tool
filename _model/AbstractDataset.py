@@ -36,4 +36,5 @@ class AbstractDataset(data.Dataset):
 
         z = np.reshape(self.labels[ID], (1,1))
         
-        return torch.Tensor(X), torch.Tensor(Y), torch.Tensor(z)
+        # X: data, Y: metadata, z: label
+        return self.list_IDs, torch.Tensor(X), torch.Tensor(Y), torch.Tensor(z)
