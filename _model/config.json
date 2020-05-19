@@ -1,9 +1,11 @@
  {
-        "file" : "/home/dso/Documents/Projects/abstract_tool/_model/cleaned_data/Scaling_data.tsv",
+        "train_file" : "/home/dso/Documents/Projects/abstract_tool/_model/cleaned_data/Scaling_data.tsv",
+        "test_file": "",
         "epochs" : 5, 
         "max_len" : 128,
         "seed" : 2020,
         "train": true,
+        "test": false,
         "clustering_model": "" 
  }
 
