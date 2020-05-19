@@ -50,13 +50,15 @@ def main():
         config = json.load(f)
 
     # default params 
-    FILE = config['file']
+    TRAIN_FILE = config['train_file']
+    TEST_FILE = config['test_file']
     TYPE = FILE.split('/')[-1][:-4] # retrieve file name without the extension
     MAX_EPOCHS = config['epochs']
     MAX_LEN = config['max_len']
     SEED = config['seed']
     PRETRAINED_KNN = config['clustering_model']
     TRAIN_MODE = config['train']
+    TEST_MODE = config['test']
 
     # model specific params
     PRETRAINED_WEIGHTS = 'allenai/scibert_scivocab_uncased'
@@ -67,8 +69,12 @@ def main():
     torch.manual_seed(SEED)
     # torch.cuda.manual_seed_all(SEED)
 
+    # config checks
     if not TRAIN_MODE and not PRETRAINED_KNN:
         logger.error('Must provide path to a trained clustering model if training mode is False.')
+    
+    if TEST_MODE and not TEST_FILE:
+        logger.error('Must provide path to a testing file with data if testing mode is True.')
     
     # load models and tokenizer
     tokenizer = BertTokenizer.from_pretrained(PRETRAINED_WEIGHTS)
@@ -81,26 +87,51 @@ def main():
     embedding_model.eval().to(device)
 
     # load data
-    training_generator, validation_generator = load_data(FILE, tokenizer, MAX_LEN)
+    training_generator, validation_generator = load_data(TRAIN_FILE, tokenizer, MAX_LEN)
 
     logger.info(f'\nNum. training samples: {len(training_generator)} \
                   \nNum. validation samples: {len(validation_generator)}')
+    
+    if TEST_MODE:
+        test_generator, _ = load_data(TEST_FILE, proportion=0, tokenizer, MAX_LEN)
+        logger.info(f'\nNum. testing samples: {len(test_generator)}')
 
-    # get BERT embeddings 
-    logger.info(' Getting augmented BERT embeddings...')
-    augmented_train = get_embeddings(training_generator, embedding_model)
-    augmented_valid = get_embeddings(validation_generator, embedding_model)
+        augmented_test = get_embeddings(test_generator, embedding_model)
 
-    all_augmented = np.hstack((augmented_train, augmented_valid))
+        # get BERT embeddings 
+        logger.info(' Getting augmented BERT embeddings...')
+        augmented_train = get_embeddings(training_generator, embedding_model)
+        augmented_valid = get_embeddings(validation_generator, embedding_model)
+        augmented_test = get_embeddings(test_generator, embedding_model)
+        
 
-    # Dimension reduction: PCA or UMAP (?)
-    pca_model = decomposition.PCA(n_components='mle')
-    all_reduced = pca.fit_transform(all_augmented)
+        all_augmented = np.hstack((augmented_train, augmented_valid, augmented_test))
 
-    print(all_reduced.shape)
+        # Dimension reduction: PCA or UMAP (?)
+        pca_model = decomposition.PCA(n_components='mle')
+        all_reduced = pca.fit_transform(all_augmented)
 
-    reduced_train = all_reduced[ :len(augmented_train['embeddings'])]
-    reduced_valid = all_reduced[len(augmented_valid['embeddings']): ]
+        print(all_reduced.shape)
+
+        reduced_train = all_reduced[ :len(augmented_train['embeddings'])]
+        reduced_valid = all_reduced[len(augmented_valid['embeddings']): -len(augmented_test['embeddings'])]
+        reduced_test = all_reduced[-len(augmented_test['embeddings']): ]
+    else:
+        # get BERT embeddings 
+        logger.info(' Getting augmented BERT embeddings...')
+        augmented_train = get_embeddings(training_generator, embedding_model)
+        augmented_valid = get_embeddings(validation_generator, embedding_model)
+
+        all_augmented = np.hstack((augmented_train, augmented_valid))
+
+        # Dimension reduction: PCA or UMAP (?)
+        pca_model = decomposition.PCA(n_components='mle')
+        all_reduced = pca.fit_transform(all_augmented)
+
+        print(all_reduced.shape)
+
+        reduced_train = all_reduced[ :len(augmented_train['embeddings'])]
+        reduced_valid = all_reduced[len(augmented_valid['embeddings']): ]
 
     if TRAIN_MODE: 
         # train new KNN
@@ -127,6 +158,23 @@ def main():
     # save all models
     pickle.dump(clustering_model)
     embedding_model.module.save_state_dict('embedding_BFAS_'+TYPE+'.pt')
+
+    # testing data, one by one, evaluate confidence in prediction
+    # present non_confident_set back to user for labeling 
+
+    # # TODO: confidence score and threshold score following this paper: https://bit.ly/2Zg3mVL 
+    # if TEST_MODE: 
+    #     non_confident_set = {}
+
+    #     for abstract_id, abstract in zip(reduced_test, augmented_test['embeddings']):
+    #         predicted_label = clustering_model.predict(abstract)
+    #         confidence = get_knn_confidence(abstract)
+
+    #         if confidence < threshold: 
+    #             non_confident_set.append([abstract_id, abstract, predicted_label])
+        
+    #     with open('to_be_labeled.txt', 'w+') as f:
+    #         f.write(non_confident_set)
 
 
 if __name__ == '__main__':

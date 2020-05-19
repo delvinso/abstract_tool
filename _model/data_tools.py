@@ -23,12 +23,13 @@ matplotlib.use('Agg')
 from AbstractDataset import AbstractDataset
 from BertForAbstractScreening import BertForAbstractScreening
 
-def load_data(csv_file, tokenizer, max_len: int=128, partition: dict=None, labels: dict=None):
+def load_data(csv_file, tokenizer, proportion: float=0.7, max_len: int=128, partition: dict=None, labels: dict=None):
     """Load data using PyTorch DataLoader.
 
     Keyword Arguments:
         csv_file {string} -- path to load raw data
         tokenizer {AutoModel.tokenizer} -- BERT-specific tokenizer for preprocessing
+        proportion {float} -- proportion for splitting up train and test. (default: {0.7})
         max_len {int} -- maximum token length for a text. (default: {128})
         partition {dict} -- maps lists of training and validation data IDs (default: {None})
         labels {dict} -- (default: {None})
@@ -49,8 +50,8 @@ def load_data(csv_file, tokenizer, max_len: int=128, partition: dict=None, label
         labels = {}
         # metadata = {}
     
-        partition = {'train': ids[ :int(total_len*0.7)],
-                     'valid': ids[int(total_len*0.7): ]
+        partition = {'train': ids[ :int(total_len * proportion)],
+                     'valid': ids[int(total_len * proportion): ]
                      }
         for i in dataset.iloc[:,0]:
             labels[i] = dataset.iloc[i][2]
@@ -64,13 +65,6 @@ def load_data(csv_file, tokenizer, max_len: int=128, partition: dict=None, label
 
     # NOTE: the tokenizer.encocde_plus function does the token/special/map/padding/attention all in one go
     dataset[1] = dataset[1].apply(lambda x: tokenizer.encode_plus(x, add_special_tokens=True))
-
-    # TODO: create attention mask (to indicate padding or no padding)
-    # mask = []
-
-    # for seq in dataset[1].tolist():
-    #     seq_mask = [float(i>0) for i in seq]
-    #     attention_masks.append(seq_mask)
 
     train_data = dataset[dataset[0].isin(partition['train'])]
     valid_data = dataset[dataset[0].isin(partition['valid'])]
