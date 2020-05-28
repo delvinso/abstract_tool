@@ -7,6 +7,7 @@ from pprint import pprint
 
 # 3rd party libraries
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
+from torch.utils import data
 from keras.preprocessing.sequence import pad_sequences
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import precision_recall_curve, f1_score, roc_auc_score, auc, average_precision_score, precision_score, recall_score
@@ -18,6 +19,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')
+import torchtext 
 
 # custom
 from AbstractDataset import AbstractDataset
@@ -50,21 +52,28 @@ def load_data(csv_file, tokenizer, proportion: float=0.7, max_len: int=128, part
         labels = {}
         # metadata = {}
     
-        partition = {'train': ids[ :int(total_len * proportion)],
-                     'valid': ids[int(total_len * proportion): ]
+        partition = {'train': ids[ :int(total_len * 0.7)],
+                     'valid': ids[int(total_len * 0.7): ]
                      }
         for i in dataset.iloc[:,0]:
-            labels[i] = dataset.iloc[i][2]
-            # metadata[i] = dataset.iloc[i][3]
+            labels[i] = dataset.iloc[i][3]
 
     # set parameters for DataLoader -- num_workers = cores
-    params = {'batch_size': 1,
+    params = {'batch_size': 2,
               'shuffle': True,
-              'num_workers': 16
+              'num_workers': 0
               }
+    # glove for metadata preprocessing 
+    glove = torchtext.vocab.GloVe(name="6B", dim=50)  
 
     # NOTE: the tokenizer.encocde_plus function does the token/special/map/padding/attention all in one go
-    dataset[1] = dataset[1].apply(lambda x: tokenizer.encode_plus(x, add_special_tokens=True))
+    dataset[1] = dataset[1].apply(lambda x: tokenizer.encode_plus(x, \
+                                                                  max_length=256, \
+                                                                  add_special_tokens=True, \
+                                                                  pad_to_max_length=True))
+    #  print(dataset[2])
+    dataset[2] = dataset[2].apply(lambda y: __pad__(str(y).split(" "), 30))
+    dataset[2] = dataset[2].apply(lambda z: __glove_embed__(z, glove))
 
     train_data = dataset[dataset[0].isin(partition['train'])]
     valid_data = dataset[dataset[0].isin(partition['valid'])]
@@ -79,16 +88,34 @@ def load_data(csv_file, tokenizer, proportion: float=0.7, max_len: int=128, part
     return training_generator, validation_generator
 
 
-def get_embeddings(data_generator: generator, embedding_model: torch.nn.Module):
+def __pad__(sequence, max_l):
+        if max_l - len(sequence) < 0:
+            sequence = sequence[:max_l]
+        else: 
+            sequence = np.pad(sequence, (0, max_l - (len(sequence))), 'constant', constant_values=(0))
+        return sequence
+
+
+def __glove_embed__(sequence, model):
+    embedded = []
+    for word in sequence:
+        embedded.append(model[word])
+    return embedded
+
+
+def get_embeddings(data_generator, embedding_model: torch.nn.Module):
     """Get BERT embeddings from a dataloader generator.
 
     Arguments:
-        data_generator {generator} -- dataloader generator (AbstractDataset).
+        data_generator {data.Dataset} -- dataloader generator (AbstractDataset).
         embedding_model {torch.nn.Module} -- embedding model. 
 
     Returns:
         embeddings {dict} -- dictionary containing ids, augmented embeddings, and labels. 
     """    
+    use_cuda = torch.cuda.is_available()
+    device = torch.device("cuda:0" if use_cuda else "cpu")
+    
     with torch.set_grad_enabled(False):
         embeddings = {'ids': [],
                       'embeddings': [],
@@ -98,14 +125,14 @@ def get_embeddings(data_generator: generator, embedding_model: torch.nn.Module):
         # get BERT training embeddings
         for local_ids, local_data, local_meta, local_labels in data_generator:
             local_data, local_meta, local_labels =  local_data.to(device).long().squeeze(1), \
-                                                    local_meta.to(device).long().squeeze(1), \
+                                                    local_meta, \
                                                     local_labels.to(device).long()
 
             augmented_embeddings = embedding_model(local_data, local_meta)
 
-            embeddings['ids'].extend(local_ids.tolist())
-            embeddings['embeddings'].extend(augmented_embeddings.tolist())
-            embeddings['labels'].extend(local_labels.tolist())
+            embeddings['ids'].extend(local_ids)
+            embeddings['embeddings'].extend(np.array(augmented_embeddings))
+            embeddings['labels'].extend(np.array(local_labels.tolist()))
 
     return embeddings
 
@@ -124,7 +151,7 @@ def metrics(metric_type: str, preds: list, labels: list):
     assert metric_type in ['flat_accuracy', 'f1', 'roc_auc', 'ap'], 'Metrics must be one of the following: \
                                                                     [\'flat_accuracy\', \'f1\', \'roc_auc\'] \
                                                                     \'precision\', \'recall\', \'ap\']'
-    labels = np.concatenate(labels)
+    labels = np.array(labels)
     # preds = np.concatenate(np.asarray(preds))
 
     if metric_type == 'flat_accuracy':

@@ -1,6 +1,7 @@
 import torch
+from torch import nn
 import numpy as np
-import torchtext 
+
 from transformers import *
 from torch.nn import CrossEntropyLoss
 
@@ -13,19 +14,17 @@ class BertForAbstractScreening(nn.Module):
             pretrained_weights {str} -- pretrained weights to load BERT with (default: {'bert-base-uncased'})
             num_labels {int} -- number of labels for the data (default: {2})
         """          
-        super(BertForSequenceClassification, self).__init__()
+        super(BertForAbstractScreening, self).__init__()
     
         self.num_labels = num_labels
         # output: last_hidden_state, pooler_output, hidden_states
         self.bert = BertModel.from_pretrained(pretrained_weights, output_hidden_states=True)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.glove = torchtext.vocab.GloVe(name="6B", dim=50)  
+        self.dropout = nn.Dropout(0.3)
 
         ########### NOTE, optional: add or change classifier on top of BERT here ###########
         # self.classifier = nn.Linear(config.hidden_size, num_labels)
-
-        nn.init.xavier_normal_(self.classifier.weight)
-
+        # nn.init.xavier_normal_(self.classifier.weight)
+        ########### NOTE, optional: add or change classifier on top of BERT here ########### 
 
     def forward(self, input_ids, augment_ids, token_type_ids=None, attention_mask=None, labels=None, augmented=None):
         """ Forward method of the BERT model. 
@@ -45,20 +44,18 @@ class BertForAbstractScreening(nn.Module):
         """        
         _, pooled_output, hidden_states = self.bert(input_ids, token_type_ids, attention_mask)
         pooled_output = self.dropout(pooled_output)
-
-        augmented_emb = []
-
-        for element in augment_list: 
-            augmented_emb.append(self.glove(element))
         
-        # get an average of all the items in the augmented embeddings
-        avg_emb = torch.mean(torch.stack(augmented_emb), dim=0)
+        # TODO: better metric than average? get an average of all the items in the augmented embeddings
+        augment_ids = [x[0].clone().detach().requires_grad_(True) for x in augment_ids]
+
+        avg_emb = torch.mean(torch.stack(augment_ids), dim=0)
 
         # concat the augementation to the pooled output  
-        pooled_output_augmented = torch.cat((pooled_output, avg_emb), dim=0)
+        pooled_output_augmented = torch.cat((pooled_output, avg_emb), dim=1)
 
         ########### NOTE, OPTIONAL: send in the augmented embeddings through classifier ###########
         # logits = self.classifier(pooled_output_augmented)
         # return logits
+        ########### NOTE, OPTIONAL: send in the augmented embeddings through classifier ###########
 
         return pooled_output_augmented

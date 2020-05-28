@@ -3,12 +3,13 @@ import torch
 import logging
 import json
 import argparse
+import pickle
 from pprint import pprint
 
 # 3rd party libraries
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 from keras.preprocessing.sequence import pad_sequences
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn import cluster, datasets, mixture, decomposition
 from sklearn.neighbors import kneighbors_graph, KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler
@@ -52,7 +53,7 @@ def main():
     # default params 
     TRAIN_FILE = config['train_file']
     TEST_FILE = config['test_file']
-    TYPE = FILE.split('/')[-1][:-4] # retrieve file name without the extension
+    TYPE = TRAIN_FILE.split('/')[-1][:-4] # retrieve file name without the extension
     MAX_EPOCHS = config['epochs']
     MAX_LEN = config['max_len']
     SEED = config['seed']
@@ -78,7 +79,7 @@ def main():
     
     # load models and tokenizer
     tokenizer = BertTokenizer.from_pretrained(PRETRAINED_WEIGHTS)
-    embedding_model = BertForAbstractScreening.from_pretrained(PRETRAINED_WEIGHTS) 
+    embedding_model = BertForAbstractScreening(PRETRAINED_WEIGHTS) 
 
     if torch.cuda.device_count() > 1:
         print("GPUs Available: ", torch.cuda.device_count())
@@ -92,8 +93,9 @@ def main():
     logger.info(f'\nNum. training samples: {len(training_generator)} \
                   \nNum. validation samples: {len(validation_generator)}')
     
+    ######## BERT embeddings and PCA ########
     if TEST_MODE:
-        test_generator, _ = load_data(TEST_FILE, proportion=0, tokenizer, MAX_LEN)
+        test_generator, _ = load_data(TEST_FILE, tokenizer, MAX_LEN, proportion=0)
         logger.info(f'\nNum. testing samples: {len(test_generator)}')
 
         augmented_test = get_embeddings(test_generator, embedding_model)
@@ -105,13 +107,14 @@ def main():
         augmented_test = get_embeddings(test_generator, embedding_model)
         
 
-        all_augmented = np.hstack((augmented_train, augmented_valid, augmented_test))
+        all_augmented = np.hstack((augmented_train['embeddings'], \
+                                   augmented_valid['embeddings'], \
+                                   augmented_test['embeddings']))
 
         # Dimension reduction: PCA or UMAP (?)
+        logger.info(' Doing PCA...')
         pca_model = decomposition.PCA(n_components='mle')
-        all_reduced = pca.fit_transform(all_augmented)
-
-        print(all_reduced.shape)
+        all_reduced = pca_model.fit_transform(all_augmented)
 
         reduced_train = all_reduced[ :len(augmented_train['embeddings'])]
         reduced_valid = all_reduced[len(augmented_valid['embeddings']): -len(augmented_test['embeddings'])]
@@ -121,39 +124,50 @@ def main():
         logger.info(' Getting augmented BERT embeddings...')
         augmented_train = get_embeddings(training_generator, embedding_model)
         augmented_valid = get_embeddings(validation_generator, embedding_model)
-
-        all_augmented = np.hstack((augmented_train, augmented_valid))
+  
+        all_augmented = np.vstack((augmented_train['embeddings'], augmented_valid['embeddings']))
 
         # Dimension reduction: PCA or UMAP (?)
-        pca_model = decomposition.PCA(n_components='mle')
-        all_reduced = pca.fit_transform(all_augmented)
-
-        print(all_reduced.shape)
+        # pca_model = decomposition.PCA(n_components='mle')
+        logger.info(' Doing PCA...')
+        pca_model = decomposition.PCA()
+        all_reduced = pca_model.fit_transform(all_augmented)
 
         reduced_train = all_reduced[ :len(augmented_train['embeddings'])]
-        reduced_valid = all_reduced[len(augmented_valid['embeddings']): ]
+        reduced_valid = all_reduced[len(augmented_train['embeddings']): ]
+    ######## BERT embeddings and PCA ########
 
+
+    ######## KNN ########
     if TRAIN_MODE: 
         # train new KNN
+        logger.info(' Clustering...')
         clustering_model = KNeighborsClassifier(n_neighbors=N_CLUSTERS, \
                                                 weights='distance')
-        # fit training embeddings 
-        clustering_model.fit(reduced_train, \   
-                             augmented_train['labels'])    # labels
+        # fit training embeddings
+        cv_scores = cross_val_score(clustering_model, \
+                                    reduced_train, \
+                                    augmented_train['labels'], \
+                                    cv=5)
+        clustering_model.fit(reduced_train, augmented_train['labels'])
+        logger.info(f" Cross-validation score for clustering model: {np.mean(cv_scores)}")
     else: 
         # load pretrained KNN (pickled) 
         clustering_model = pickle.load(PRETRAINED_KNN)
+    ######## KNN ########
+
 
     # predict the posterior probability of the validation embeddings, check label.. 
     all_predictions = [clustering_model.predict_proba(reduced_valid), \
                        clustering_model.predict(reduced_valid), \
                        augmented_valid['labels']]
-    
+
     # check prediction performance on the validation data 
+    logger.info(' Getting metrics...')
     roc_auc = metrics('roc_auc', preds = all_predictions[1], labels = all_predictions[2])
     ap = metrics('ap', preds = all_predictions[1], labels = all_predictions[2])
     
-    logger.info(f'AUROC: {np.avg(roc_auc)} \nAP: {np.avg(ap)}')
+    logger.info(f'AUROC: {np.mean(roc_auc)} \nAP: {np.mean(ap)}')
 
     # save all models
     pickle.dump(clustering_model)

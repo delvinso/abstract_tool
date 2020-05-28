@@ -1,8 +1,8 @@
  {
-        "train_file" : "/home/dso/Documents/Projects/abstract_tool/_model/cleaned_data/Scaling_data.tsv",
+        "train_file" : "/Users/chantal/Desktop/systematic_review/abstract_tool/_initial_work/cleaned_data_metadata/ADIPP_metadata.tsv",
         "test_file": "",
         "epochs" : 5, 
-        "max_len" : 128,
+        "max_len" : 256,
         "seed" : 2020,
         "train": true,
         "test": false,
