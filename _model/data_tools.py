@@ -40,8 +40,21 @@ def load_data(csv_file, tokenizer, proportion: float=0.7, max_len: int=128, part
         torch.utils.data.Dataset -- dataset
     """
 
-    # columns: [0] unique ID, [1] text, [2] label, [3] metadata 
+    # columns: [0] unique ID, [1] text, [2] metadata, [3] label
+
     dataset = pd.read_csv(csv_file, header=None, sep='\t')
+    # below fix null values wrecking encode_plus
+    print(dataset)
+    # convert labels to integer and drop nas
+    dataset.iloc[:, 3] = pd.to_numeric(dataset.iloc[:, 3], errors = 'coerce' )
+    dataset = dataset[~ dataset[2].isnull()]
+    print(dataset)
+    # recreate the first column with the reset index.
+    dataset = dataset[(dataset.iloc[:, 3] == 1) | (dataset.iloc[:, 3] == 0)] \
+        .reset_index().reset_index().drop(columns = ['index', 0]).rename(columns = {'level_0': 0})
+    #dataset = dataset[~ dataset[2].isnull()]
+    print(dataset)
+
 
     # create list of train/valid IDs if not provided
     if not partition and not labels:
@@ -59,21 +72,21 @@ def load_data(csv_file, tokenizer, proportion: float=0.7, max_len: int=128, part
             labels[i] = dataset.iloc[i][3]
 
     # set parameters for DataLoader -- num_workers = cores
-    params = {'batch_size': 2,
+    params = {'batch_size': 32,
               'shuffle': True,
               'num_workers': 0
               }
     # glove for metadata preprocessing 
-    glove = torchtext.vocab.GloVe(name="6B", dim=50)  
+    # glove = torchtext.vocab.GloVe(name="6B", dim=50)
 
     # NOTE: the tokenizer.encocde_plus function does the token/special/map/padding/attention all in one go
-    dataset[1] = dataset[1].apply(lambda x: tokenizer.encode_plus(x, \
-                                                                  max_length=256, \
+    dataset[1] = dataset[1].apply(lambda x: tokenizer.encode_plus(str(x), \
+                                                                  max_length=max_len, \
                                                                   add_special_tokens=True, \
                                                                   pad_to_max_length=True))
     #  print(dataset[2])
-    dataset[2] = dataset[2].apply(lambda y: __pad__(str(y).split(" "), 30))
-    dataset[2] = dataset[2].apply(lambda z: __glove_embed__(z, glove))
+    # dataset[2] = dataset[2].apply(lambda y: __pad__(str(y).split(" "), 30))
+    # dataset[2] = dataset[2].apply(lambda z: __glove_embed__(z, glove))
 
     train_data = dataset[dataset[0].isin(partition['train'])]
     valid_data = dataset[dataset[0].isin(partition['valid'])]
@@ -128,11 +141,11 @@ def get_embeddings(data_generator, embedding_model: torch.nn.Module):
                                                     local_meta, \
                                                     local_labels.to(device).long()
 
-            augmented_embeddings = embedding_model(local_data, local_meta)
+            augmented_embeddings = embedding_model(local_data)#, local_meta)
 
             embeddings['ids'].extend(local_ids)
-            embeddings['embeddings'].extend(np.array(augmented_embeddings))
-            embeddings['labels'].extend(np.array(local_labels.tolist()))
+            embeddings['embeddings'].extend(np.array(augmented_embeddings.detach().cpu()))
+            embeddings['labels'].extend(np.array(local_labels.detach().cpu().tolist()))
 
     return embeddings
 
