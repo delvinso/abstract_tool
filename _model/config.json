@@ -1,11 +1,16 @@
  {
-        "train_file" : "/Users/chantal/Desktop/systematic_review/abstract_tool/_initial_work/cleaned_data_metadata/ADIPP_metadata.tsv",
+       "task": : "ADDIP", 
+       "train_file" : "/Users/chantal/Desktop/systematic_review/abstract_tool/_initial_work/cleaned_data_metadata/ADIPP_metadata.tsv",
         "test_file": "",
-        "epochs" : 5, 
+        "pretrained_embeddings": "",
+        "pretrained_bert": "",
+        "pretrained_classifier": "",
+        "epochs": 5,
+        "metadata": true, 
+        "train_classifier": true,
+        "finetune_bert": false,
         "max_len" : 256,
         "seed" : 2020,
-        "train": true,
-        "test": false,
-        "clustering_model": "" 
+        "bert_pretrained_weights": "allenai/scibert_scivocab_uncased",
+        "cache_folder": "/Users/chantal/Desktop/systematic_review/abstract_tool/cache/",
  }
-
