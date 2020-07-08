@@ -25,13 +25,12 @@ import torchtext
 from AbstractDataset import AbstractDataset
 from BertForAbstractScreening import BertForAbstractScreening
 
-def load_data(csv_file, tokenizer, metadata: bool, proportion: float=0.7, max_len: int=128, partition: dict=None, labels: dict=None):
+def load_data(csv_file, tokenizer, proportion: float=0.7, max_len: int=128, partition: dict=None, labels: dict=None):
     """Load data using PyTorch DataLoader.
 
     Keyword Arguments:
         csv_file {string} -- path to load raw data
         tokenizer {AutoModel.tokenizer} -- BERT-specific tokenizer for preprocessing
-        metadata {bool} -- whether the data contains metadata for augmented embeddings
         proportion {float} -- proportion for splitting up train and test. (default: {0.7})
         max_len {int} -- maximum token length for a text. (default: {128})
         partition {dict} -- maps lists of training and validation data IDs (default: {None})
@@ -45,16 +44,17 @@ def load_data(csv_file, tokenizer, metadata: bool, proportion: float=0.7, max_le
 
     dataset = pd.read_csv(csv_file, header=None, sep='\t')
     # below fix null values wrecking encode_plus
-
+    print(dataset)
     # convert labels to integer and drop nas
     dataset.iloc[:, 3] = pd.to_numeric(dataset.iloc[:, 3], errors = 'coerce' )
     dataset = dataset[~ dataset[2].isnull()]
     print(dataset)
-
     # recreate the first column with the reset index.
     dataset = dataset[(dataset.iloc[:, 3] == 1) | (dataset.iloc[:, 3] == 0)] \
         .reset_index().reset_index().drop(columns = ['index', 0]).rename(columns = {'level_0': 0})
-    # dataset = dataset[~ dataset[2].isnull()]
+    #dataset = dataset[~ dataset[2].isnull()]
+    print(dataset)
+
 
     # create list of train/valid IDs if not provided
     if not partition and not labels:
@@ -76,17 +76,17 @@ def load_data(csv_file, tokenizer, metadata: bool, proportion: float=0.7, max_le
               'shuffle': True,
               'num_workers': 0
               }
+    # glove for metadata preprocessing 
+    # glove = torchtext.vocab.GloVe(name="6B", dim=50)
 
     # NOTE: the tokenizer.encocde_plus function does the token/special/map/padding/attention all in one go
     dataset[1] = dataset[1].apply(lambda x: tokenizer.encode_plus(str(x), \
                                                                   max_length=max_len, \
                                                                   add_special_tokens=True, \
                                                                   pad_to_max_length=True))
-
-    if metadata: # glove for metadata preprocessing 
-        glove = torchtext.vocab.GloVe(name="6B", dim=50)
-        dataset[2] = dataset[2].apply(lambda y: __pad__(str(y).split(" "), 30))
-        dataset[2] = dataset[2].apply(lambda z: __glove_embed__(z, glove))
+    #  print(dataset[2])
+    # dataset[2] = dataset[2].apply(lambda y: __pad__(str(y).split(" "), 30))
+    # dataset[2] = dataset[2].apply(lambda z: __glove_embed__(z, glove))
 
     train_data = dataset[dataset[0].isin(partition['train'])]
     valid_data = dataset[dataset[0].isin(partition['valid'])]
@@ -102,7 +102,6 @@ def load_data(csv_file, tokenizer, metadata: bool, proportion: float=0.7, max_le
 
 
 def __pad__(sequence, max_l):
-    """ Padding function for 1D sequences """
         if max_l - len(sequence) < 0:
             sequence = sequence[:max_l]
         else: 
@@ -111,7 +110,6 @@ def __pad__(sequence, max_l):
 
 
 def __glove_embed__(sequence, model):
-    """ Embed words in a sequence using GLoVE model """
     embedded = []
     for word in sequence:
         embedded.append(model[word])

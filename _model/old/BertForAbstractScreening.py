@@ -5,7 +5,7 @@ import numpy as np
 from transformers import *
 from torch.nn import CrossEntropyLoss
 
-class AbstractBert(nn.Module):
+class BertForAbstractScreening(nn.Module):
   
     def __init__(self, pretrained_weights: str='bert-base-uncased', num_labels: int=2):
         """ BERT model with customizable layers for classification. 
@@ -14,10 +14,9 @@ class AbstractBert(nn.Module):
             pretrained_weights {str} -- pretrained weights to load BERT with (default: {'bert-base-uncased'})
             num_labels {int} -- number of labels for the data (default: {2})
         """          
-        super(AbstractBert, self).__init__()
+        super(BertForAbstractScreening, self).__init__()
     
         self.num_labels = num_labels
-
         # output: last_hidden_state, pooler_output, hidden_states
         self.bert = BertModel.from_pretrained(pretrained_weights, output_hidden_states=True)
         self.dropout = nn.Dropout(0.3)
@@ -41,36 +40,35 @@ class AbstractBert(nn.Module):
             augmented {torch.tensor} -- metadata embeddings to augment the pooled output (default: {None})
 
         Returns:
-            torch.tensor -- pooled output token or logits
-        """  
-
-        '''
-        NOTE: 
-        The pooled output is the learned pooled representation of the entire input.
-        If we want to manually learn a new representation, we want to take the last 4 layers
-        to get an embedding for a single token.
-        Then, we would need to learn a new representation (e.g., 1D CNN) between all these embeddings 
-        for the entire input (averaging all the embeddings will lose more info compared to using [CLS] token). 
-        '''
-        
+            torch.tensor -- [description]
+        """        
         _, pooled_output, hidden_states = self.bert(input_ids, token_type_ids, attention_mask)
         # pooled_output = self.dropout(pooled_output)
-
-        # TODO: better metric than average? get an average of all the items in the augmented embeddings
-        if augment_ids is not None:
-            augment_ids = [x[0].clone().detach().requires_grad_(True) for x in augment_ids]
-            avg_emb = torch.mean(torch.stack(augment_ids), dim=0)
-            # concat the augementation to the pooled output
-            pooled_output_augmented = torch.cat((pooled_output, avg_emb), dim=1)
-
-            ########### NOTE, OPTIONAL: send in the augmented embeddings through classifier ###########
-            # logits = self.classifier(pooled_output_augmented)
-            # return logits
-            ########### NOTE, OPTIONAL: send in the augmented embeddings through classifier ###########
-
-            return pooled_output_augmented
-        else: 
-            return pooled_output
+        # https://huggingface.co/transformers/model_doc/bert.html#bertmodel
+        # returns last_hidden_state, pooler_output, hidden_states, attention
+        # so we actually want hidden_states, not pooler_output
+        # print('Last Hidden State: {}'.format(_.shape))
+        # print('Pooler Output (CLS): {}'.format(pooled_output.shape))
+        # print('Embeddings: {} Shape of Last State? \t{}'.format(str(len(hidden_states)), (hidden_states[-1].shape)))
+        # print('\n')
 
 
-        
+
+    # TODO: better metric than average? get an average of all the items in the augmented embeddings
+        # augment_ids = [x[0].clone().detach().requires_grad_(True) for x in augment_ids]
+        #
+        # avg_emb = torch.mean(torch.stack(augment_ids), dim=0)
+        #
+        # # concat the augementation to the pooled output
+        # pooled_output_augmented = torch.cat((pooled_output, avg_emb), dim=1)
+
+        # WITHOUT EMBEDDINGS
+
+
+        ########### NOTE, OPTIONAL: send in the augmented embeddings through classifier ###########
+        # logits = self.classifier(pooled_output_augmented)
+        # return logits
+        ########### NOTE, OPTIONAL: send in the augmented embeddings through classifier ###########
+
+        # return pooled_output_augmented
+        return pooled_output
