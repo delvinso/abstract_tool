@@ -1,4 +1,10 @@
-class AbstractDataset(data.Dataset):
+import torch
+import pandas as pd
+import numpy as np
+from torch.utils import data
+from keras.preprocessing.sequence import pad_sequences
+
+class EmbeddingsDataset(data.Dataset):
   def __init__(self, data, list_IDs: list, labels: dict, max_len: int=128):
     """Create custom torch Dataset.
     

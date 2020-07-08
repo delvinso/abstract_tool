@@ -16,7 +16,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import precision_recall_curve, f1_score, roc_auc_score, auc, average_precision_score, precision_score, recall_score
 from transformers import *
 from tqdm import tqdm, trange
-from torch.nn import CrossEntropyLos
+from torch.nn import CrossEntropyLoss
 
 import pandas as pd
 import numpy as np
@@ -27,8 +27,8 @@ matplotlib.use('Agg')
 # custom
 from AbstractDataset import AbstractDataset
 from AbstractClassifier import AbstractClassifier
-from BertForAbstractScreening import BertForAbstractScreening
-from data_tools import load_data, metrics, get_bert_embeddings, get_pca_embeddings
+from AbstractBert import AbstractBert
+from utils import load_data, metrics, get_bert_embeddings, get_pca_embeddings
 
 
 """ TODO: TESTING MODULE. """

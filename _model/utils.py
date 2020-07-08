@@ -24,7 +24,7 @@ import torchtext
 # custom
 from AbstractDataset import AbstractDataset
 from EmbeddingsDataset import EmbeddingsDataset
-from BertForAbstractScreening import BertForAbstractScreening
+from AbstractBert import AbstractBert
 
 def load_data(csv_file, tokenizer, metadata: bool, proportion: float=0.7, max_len: int=128, partition: dict=None, labels: dict=None):
     """Load data using PyTorch DataLoader.
@@ -104,11 +104,11 @@ def load_data(csv_file, tokenizer, metadata: bool, proportion: float=0.7, max_le
 
 def __pad__(sequence, max_l):
     """ Padding function for 1D sequences """
-        if max_l - len(sequence) < 0:
-            sequence = sequence[:max_l]
-        else: 
-            sequence = np.pad(sequence, (0, max_l - (len(sequence))), 'constant', constant_values=(0))
-        return sequence
+    if max_l - len(sequence) < 0:
+        sequence = sequence[:max_l]
+    else: 
+        sequence = np.pad(sequence, (0, max_l - (len(sequence))), 'constant', constant_values=(0))
+    return sequence
 
 
 def __glove_embed__(sequence, model):
@@ -127,10 +127,10 @@ def load_embeddings(config):
     """    
 
     if config['cache_folder']:
-        with open(config['cache_folder']+'_'+config['task']'_training_embeddings.p', 'rb') as cache:
+        with open(config['cache_folder']+'_'+config['task']+'_training_embeddings.p', 'rb') as cache:
             train_embeddings = pickle.load(cache)
 
-        with open(config['cache_folder']+'_'+config['task']'_validation_embeddings.p', 'rb') as cache:
+        with open(config['cache_folder']+'_'+config['task']+'_validation_embeddings.p', 'rb') as cache:
             valid_embeddings = pickle.load(cache)
     else:
         # get embeddings from scratch
@@ -144,12 +144,12 @@ def load_embeddings(config):
         embedding_model.eval().to(device)
 
         logger.info(' Getting BERT embeddings...')
-            train_embeddings = get_bert_embeddings(training_generator, embedding_model)
-            valid_embeddings = get_bert_embeddings(validation_generator, embedding_model)
+        train_embeddings = get_bert_embeddings(training_generator, embedding_model)
+        valid_embeddings = get_bert_embeddings(validation_generator, embedding_model)
 
         # save embeddings
-        pickle.dump(train_embeddings, open(config['cache_folder']+'_'+config['task']'_training_embeddings.p', 'wb'))
-        pickle.dump(valid_embeddings, open(config['cache_folder']+'_'+config['task']'_validation_embeddings.p', 'wb'))
+        pickle.dump(train_embeddings, open(config['cache_folder']+'_'+config['task']+'_training_embeddings.p', 'wb'))
+        pickle.dump(valid_embeddings, open(config['cache_folder']+'_'+config['task']+'_validation_embeddings.p', 'wb'))
     
     return train_embeddings, valid_embeddings
 
