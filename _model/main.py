@@ -28,7 +28,7 @@ matplotlib.use('Agg')
 from AbstractDataset import AbstractDataset
 from AbstractClassifier import AbstractClassifier
 from AbstractBert import AbstractBert
-from utils import load_data, metrics, get_bert_embeddings, get_pca_embeddings
+from utils import load_data, metrics, load_embeddings, get_bert_embeddings, get_pca_embeddings
 
 
 """ TODO: TESTING MODULE. """
@@ -52,12 +52,12 @@ def main():
         config = json.load(f)
 
     # set seeds
-    np.random.seed(SEED)
-    torch.manual_seed(SEED)
+    np.random.seed(config['seed'])
+    torch.manual_seed(config['seed'])
     # torch.cuda.manual_seed_all(SEED)
 
     # load data 
-    training_generator, validation_generator = load_data(config['train_file'], tokenizer, config['max_len'])
+    training_generator, validation_generator = load_data(config, metadata=False)
 
     # get embeddings  
     train_embeddings, valid_embeddings = load_embeddings(config)

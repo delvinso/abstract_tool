@@ -26,12 +26,11 @@ from AbstractDataset import AbstractDataset
 from EmbeddingsDataset import EmbeddingsDataset
 from AbstractBert import AbstractBert
 
-def load_data(csv_file, tokenizer, metadata: bool, proportion: float=0.7, max_len: int=128, partition: dict=None, labels: dict=None):
+def load_data(config, metadata: bool, proportion: float=0.7, max_len: int=256, partition: dict=None, labels: dict=None):
     """Load data using PyTorch DataLoader.
 
     Keyword Arguments:
-        csv_file {string} -- path to load raw data
-        tokenizer {AutoModel.tokenizer} -- BERT-specific tokenizer for preprocessing
+        config {string} -- config file containing data paths and tokenizer information
         metadata {bool} -- whether the data contains metadata for augmented embeddings
         proportion {float} -- proportion for splitting up train and test. (default: {0.7})
         max_len {int} -- maximum token length for a text. (default: {128})
@@ -44,7 +43,7 @@ def load_data(csv_file, tokenizer, metadata: bool, proportion: float=0.7, max_le
 
     # columns: [0] unique ID, [1] text, [2] metadata, [3] label
 
-    dataset = pd.read_csv(csv_file, header=None, sep='\t')
+    dataset = pd.read_csv(config['train_file'], header=None, sep='\t')
     # below fix null values wrecking encode_plus
 
     # convert labels to integer and drop nas
@@ -79,10 +78,12 @@ def load_data(csv_file, tokenizer, metadata: bool, proportion: float=0.7, max_le
               }
 
     # NOTE: the tokenizer.encocde_plus function does the token/special/map/padding/attention all in one go
+    tokenizer = BertTokenizer.from_pretrained(config['bert_pretrained_weights'])
     dataset[1] = dataset[1].apply(lambda x: tokenizer.encode_plus(str(x), \
                                                                   max_length=max_len, \
                                                                   add_special_tokens=True, \
-                                                                  pad_to_max_length=True))
+                                                                  pad_to_max_length=True, \
+truncation=True))
 
     if metadata: # glove for metadata preprocessing 
         glove = torchtext.vocab.GloVe(name="6B", dim=50)

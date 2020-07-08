@@ -1,6 +1,6 @@
  {
-       "task": : "ADDIP", 
-       "train_file" : "/Users/chantal/Desktop/systematic_review/abstract_tool/_initial_work/cleaned_data_metadata/ADIPP_metadata.tsv",
+       "task": "ADDIP", 
+       "train_file" : "/home/d/dbassani/chantals/abstract_tool/_initial_work/cleaned_data_date/ADIPP_data.tsv",
         "test_file": "",
         "pretrained_embeddings": "",
         "pretrained_bert": "",
@@ -12,5 +12,5 @@
         "max_len" : 256,
         "seed" : 2020,
         "bert_pretrained_weights": "allenai/scibert_scivocab_uncased",
-        "cache_folder": "/Users/chantal/Desktop/systematic_review/abstract_tool/cache/",
+        "cache_folder": "/home/d/dbassani/chantals/abstract_tool/cache/"
  }
