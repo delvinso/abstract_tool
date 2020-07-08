@@ -4,12 +4,14 @@ import logging
 import json
 import argparse
 import pickle
+import os
 from pprint import pprint
 
 # 3rd party libraries
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 from keras.preprocessing.sequence import pad_sequences
-from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn import cluster, datasets, mixture, decomposition
 from sklearn.neighbors import kneighbors_graph, KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler
@@ -28,28 +30,28 @@ from AbstractDataset import AbstractDataset
 from BertForAbstractScreening import BertForAbstractScreening
 from data_tools import load_data, metrics, get_embeddings
 
-#TODO: clean this up.
+# for dealing with multiprocessing/len(ancdata) error
+import resource
+rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
+resource.setrlimit(resource.RLIMIT_NOFILE, (2048*2, rlimit[1]))
+
+'''
+TODO: Add function to do UMAP/embedding visualization  
+TODO: incorporate phase 2
+'''
 
 def main():
-
-    # logging.basicConfig(filename='example.log', filemode='w', level=logging.DEBUG) # if you want to pipe the logging to a file
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
-
-    use_cuda = torch.cuda.is_available()
-    device = torch.device("cuda:0" if use_cuda else "cpu")
 
     # set up parser
     parser = argparse.ArgumentParser()
     parser.add_argument('--config_dir', help='path to the json config file')
     args = parser.parse_args()
 
-    # load config file 
+    # load config file
     with open(args.config_dir) as f:
         config = json.load(f)
 
-    # TODO: We really dont need these variables lol, just use the config file directly 
-    # default params 
+    # default params
     TRAIN_FILE = config['train_file']
     TEST_FILE = config['test_file']
     TYPE = TRAIN_FILE.split('/')[-1][:-4] # retrieve file name without the extension
@@ -59,11 +61,22 @@ def main():
     PRETRAINED_KNN = config['clustering_model']
     TRAIN_MODE = config['train']
     TEST_MODE = config['test']
-    CACHED_EMBEDDINGS = config['embeddings']
+    OUT_DIR = config['out_dir']
+
+    if not os.path.exists(OUT_DIR): os.makedirs(OUT_DIR)
+
+    # logging.basicConfig(filename='example.log', filemode='w', level=logging.DEBUG) # if you want to pipe the logging to a file
+    #TODO take as parameter to json
+    log_out = os.path.join(OUT_DIR, 'model.log')
+    logging.basicConfig(level=logging.INFO, filename = log_out)
+    logger = logging.getLogger(__name__)
+
+    use_cuda = torch.cuda.is_available()
+    device = torch.device("cuda:0" if use_cuda else "cpu")
 
     # model specific params
     PRETRAINED_WEIGHTS = 'allenai/scibert_scivocab_uncased'
-    N_CLUSTERS = 5
+    N_CLUSTERS = 2
     COV_TYPE = 'full'
 
     np.random.seed(SEED)
@@ -73,115 +86,149 @@ def main():
     # config checks
     if not TRAIN_MODE and not PRETRAINED_KNN:
         logger.error('Must provide path to a trained clustering model if training mode is False.')
-    
+
     if TEST_MODE and not TEST_FILE:
         logger.error('Must provide path to a testing file with data if testing mode is True.')
-    
-    if CACHED_EMBEDDINGS: # check for cached embeddings
-        # load train, valid
-        reduced_train = CACHED_EMBEDDINGS['train']
-        reduced_valid = CACHED_EMBEDDINGS['valid']
 
-        # load labels
-        label_train = CACHED_EMBEDDINGS['train_label']
-        label_valid = CACHED_EMBEDDINGS['valid_label']
+    # load models and tokenizer
+    tokenizer = BertTokenizer.from_pretrained(PRETRAINED_WEIGHTS)
+    embedding_model = BertForAbstractScreening(PRETRAINED_WEIGHTS)
 
-        if TEST_MODE: # if testing, also load test labels
-            reduced_test = CACHED_EMBEDDINGS['test']
-            label_test = CACHED_EMBEDDINGS['test_label']
+    # multiple GPUs
+    if torch.cuda.device_count() > 1:
+        print("GPUs Available: ", torch.cuda.device_count())
+        embedding_model = torch.nn.DataParallel(embedding_model, device_ids=[0, 1, 2])
 
-    else: # obtain embeddings from scratch 
-        tokenizer = BertTokenizer.from_pretrained(PRETRAINED_WEIGHTS)
-        embedding_model = BertForAbstractScreening(PRETRAINED_WEIGHTS) 
+    embedding_model.eval().to(device)
 
-        if torch.cuda.device_count() > 1:
-            print("GPUs Available: ", torch.cuda.device_count())
-            embedding_model = torch.nn.DataParallel(model, device_ids=[0, 1, 2])
+    # load data
+    training_generator, validation_generator = load_data(TRAIN_FILE, tokenizer, max_len = MAX_LEN)
+    logger.info('Dataset is {}'.format(TYPE))
+    logger.info(f'\nNum. training samples: {len(training_generator)} \
+                  \nNum. validation samples: {len(validation_generator)}')
 
-        embedding_model.eval().to(device)
+    ######## BERT embeddings and PCA ########
 
-        # load data
-        training_generator, validation_generator = load_data(TRAIN_FILE, tokenizer, MAX_LEN)
+    if TEST_MODE:
+        test_generator, _ = load_data(TEST_FILE, tokenizer, max_len = MAX_LEN, proportion=0)
+        logger.info(f'\nNum. testing samples: {len(test_generator)}')
 
-        logger.info(f'\nNum. training samples: {len(training_generator)} \
-                    \nNum. validation samples: {len(validation_generator)}')
-    
-        ######## BERT embeddings and PCA ########
-        logger.info(' Getting BERT embeddings...')
+        # get BERT embeddings
+        logger.info(' Getting augmented BERT embeddings...')
+        augmented_train = get_embeddings(training_generator, embedding_model)
+        augmented_valid = get_embeddings(validation_generator, embedding_model)
+        augmented_test = get_embeddings(test_generator, embedding_model)
+
+        logger.info(' Standardizing ')
+        # standardizing since KNN is non-parametric and is not robust to feature parameters
+        ss = StandardScaler()
+        train_embed_ss = ss.fit_transform(augmented_train['embeddings'])
+        valid_embed_ss = ss.transform(augmented_valid['embeddings'])
+        test_reduc_ss = ss.transform(augmented_test['embeddings'])
+
+        # Dimension reduction: PCA or UMAP (?)
+        logger.info(' Doing PCA...')
+        pca_model = decomposition.PCA(n_components = 0.99) # this can be a parameter down the road, but for debugging it's fine
+        train_reduc = pca_model.fit_transform(train_embed_ss)
+        val_reduc = pca_model.transform(valid_embed_ss)
+        test_reduc = pca_model.transform(test_reduc_ss)
+
+        # all_augmented = np.hstack((augmented_train['embeddings'], \
+        #                            augmented_valid['embeddings'], \
+        #                            augmented_test['embeddings']))
+
+        # Dimension reduction: PCA or UMAP (?)
+        # FIX THIS.
+        # logger.info(' Doing PCA...')
+        # pca_model = decomposition.PCA(n_components='mle')
+        # all_reduced = pca_model.fit_transform(all_augmented)
+        #
+        # reduced_train = all_reduced[ :len(augmented_train['embeddings'])]
+        # reduced_valid = all_reduced[len(augmented_valid['embeddings']): -len(augmented_test['embeddings'])]
+        # reduced_test = all_reduced[-len(augmented_test['embeddings']): ]
+    else:
+        # get BERT embeddings
+        logger.info(' Getting augmented BERT embeddings...')
         augmented_train = get_embeddings(training_generator, embedding_model)
         augmented_valid = get_embeddings(validation_generator, embedding_model)
 
-        if TEST_MODE: # if testing, load the testing data as well
-            test_generator, _ = load_data(TEST_FILE, tokenizer, MAX_LEN, proportion=0)
-            logger.info(f'\nNum. testing samples: {len(test_generator)}')
+        # save down embeddings as a pickle
+        with open(os.path.join(OUT_DIR, '{}_test_aug_valid.pkl'.format(TYPE)), 'wb') as handle:
+            pickle.dump(augmented_valid, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-            augmented_test = get_embeddings(test_generator, embedding_model)
-            
-            all_augmented = np.vstack((augmented_train['embeddings'], \
-                                    augmented_valid['embeddings'], \
-                                    augmented_test['embeddings']))
-        else:
-            all_augmented = np.vstack((augmented_train['embeddings'], augmented_valid['embeddings']))
+        with open(os.path.join(OUT_DIR, '{}_test_aug_train.pkl'.format(TYPE)), 'wb') as handle:
+            pickle.dump(augmented_train, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-        # Dimension reduction: PCA
+        logger.info(' Standardizing ')
+        # standardizing since KNN is non-parametric and is not robust to feature parameters
+        ss = StandardScaler()
+        train_embed_ss = ss.fit_transform(augmented_train['embeddings'])
+        valid_embed_ss = ss.transform(augmented_valid['embeddings'])
+
         logger.info(' Doing PCA...')
-        pca_model = decomposition.PCA(n_components='mle')
-        all_reduced = pca_model.fit_transform(all_augmented)
+        pca_model = decomposition.PCA(n_components = 0.99) # this can be a parameter down the road, but for debugging it's fine
+        train_reduc = pca_model.fit_transform(train_embed_ss)
+        val_reduc = pca_model.transform(valid_embed_ss)
 
-        reduced_train = all_reduced[ :len(augmented_train['embeddings'])]
-        reduced_train_label = augmented_train['labels']
-
-        if TEST_MODE: 
-            reduced_valid = all_reduced[len(augmented_train['embeddings']): -len(augmented_test['embeddings'])]
-            reduced_valid_label = augmented_valid['labels']
-
-            reduced_test = all_reduced[-len(augmented_test['embeddings']): ]
-            reduced_test_label = augmented_test['labels']
-        else:
-            reduced_valid = all_reduced[len(augmented_train['embeddings']): ]
-            reduced_valid_label = augmented_valid['labels']
-
-        # save embeddings 
-        embeddings = {'train' = ,
-                      'valid' = ,
-                      'test'  = ,
-                      }
-        ######## BERT embeddings and PCA ########
+    ######## BERT embeddings and PCA ########
 
     ######## KNN ########
-    if TRAIN_MODE: 
-        # train new KNN
-        logger.info(' Clustering...')
-        clustering_model = KNeighborsClassifier(n_neighbors=N_CLUSTERS, \
-                                                weights='distance')
-        # fit training embeddings
-        cv_scores = cross_val_score(clustering_model, \
-                                    reduced_train, \
-                                    augmented_train['labels'], \
-                                    cv=5)
-        clustering_model.fit(reduced_train, augmented_train['labels'])
-        logger.info(f" Cross-validation score for clustering model: {np.mean(cv_scores)}")
-    else: 
-        # load pretrained KNN (pickled) 
-        clustering_model = pickle.load( )
+    if TRAIN_MODE:
+
+        logger.info(' Clustering with grid search...')
+        # initialize model
+        clustering_model = KNeighborsClassifier(  n_jobs = 32)
+        # optimal # of neighbours? this can be a dataset specific thing. no need to identify a single value..
+        param_grid = {'n_neighbors': [3, 5, 7, 11, 13, 15],
+                      'weights': ['distance']}
+        # grid search arguments
+        grids = GridSearchCV(clustering_model,
+                             param_grid,
+                             cv= 10 ,
+                             scoring = {'average_precision', 'roc_auc'},
+                             refit = 'roc_auc')
+        # perform the grid search
+        grids.fit(train_reduc, augmented_train['labels'])
+        # take cv results into a dataframe and slice row with best parameters
+        cv_res = pd.DataFrame.from_dict(grids.cv_results_)#.groupby('param_n_neighbors').agg('mean').reset_index()
+        cv_best_res = cv_res[cv_res.rank_test_roc_auc == 1]
+
+        logger.info((f"KNN Training:\n\tAUROC: {cv_best_res[['mean_test_roc_auc']].iloc[0]['mean_test_roc_auc']}\
+                                    \n\tAP: {cv_best_res[['mean_test_average_precision']].iloc[0]['mean_test_average_precision']}")
+                    )
+    else:
+        # load pretrained KNN (pickled)
+        clustering_model = pickle.load(PRETRAINED_KNN)
     ######## KNN ########
 
-
-    # predict the posterior probability of the validation embeddings, check label.. 
-    all_predictions = [clustering_model.predict_proba(reduced_valid), \
-                       clustering_model.predict(reduced_valid), \
+    # predict the posterior probability of the validation embeddings, check label..
+    all_predictions = [grids.predict_proba(val_reduc),
+                       grids.predict(val_reduc),
                        augmented_valid['labels']]
 
-    # check prediction performance on the validation data 
+    # check prediction performance on the validation data
     logger.info(' Getting metrics...')
-    roc_auc = metrics('roc_auc', preds = all_predictions[1], labels = all_predictions[2])
-    ap = metrics('ap', preds = all_predictions[1], labels = all_predictions[2])
-    
-    logger.info(f'AUROC: {np.mean(roc_auc)} \nAP: {np.mean(ap)}')
+    # AUROC and AUPRC are calculated with P(y == 1) so we want to use index 0 instead of 1 of all_predictions
+    roc_auc = metrics('roc_auc', preds = [x[1] for x in all_predictions[0]], labels = all_predictions[2])
+    ap = metrics('ap', preds = [x[1] for x in all_predictions[0]], labels = all_predictions[2])
+
+    logger.info(f'KNN Validation:\n\tAUROC: {roc_auc} \n\tAP: {ap}')
+
+    # --- saving down results for debugging ----
+    run_res = pd.DataFrame([roc_auc,
+                            ap,
+                            cv_best_res[['mean_test_roc_auc']].iloc[0]['mean_test_roc_auc'],
+                            cv_best_res[['mean_test_average_precision']].iloc[0]['mean_test_average_precision']])
+    run_res['metrics'] = ['auroc', 'auprc', 'auroc', 'auprc']
+    run_res['set'] = ['validation', 'validation', 'training', 'training']
+    run_res['data'] = TYPE
+
+    run_res.to_csv(os.path.join(OUT_DIR, '{}_results.csv'.format(TYPE)))
+
 
     # save all models
-    pickle.dump(clustering_model, open('model', 'w+'))
-    embedding_model.module.save_state_dict('embedding_BFAS_'+TYPE+'.pt')
+    #
+    #     pickle.dump(clustering_model)# embedding_model.module.save_state_dict('embedding_BFAS_'+TYPE+'.pt')
 
     # testing data, one by one, evaluate confidence in prediction
     # present non_confident_set back to user for labeling 
@@ -196,7 +243,7 @@ def main():
 
     #         if confidence < threshold: 
     #             non_confident_set.append([abstract_id, abstract, predicted_label])
-        
+
     #     with open('to_be_labeled.txt', 'w+') as f:
     #         f.write(non_confident_set)
 
