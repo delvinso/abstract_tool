@@ -59,13 +59,13 @@ def main():
     # load data 
     training_generator, validation_generator = load_data(config['train_file'], tokenizer, config['max_len'])
 
-    # get embeddings 
+    # get embeddings  
     train_embeddings, valid_embeddings = load_embeddings(config)
 
     # do PCA (TODO: or augmented PCA)
     reduced_train_generator, reduced_valid_generator = get_pca_embeddings(train_embeddings, valid_embeddings)
 
-    # train classifier
+    ############################### Train Classifier ###############################
     classifier = AbstractClassifier(embedding_size=len(reduced_train[0]))
     criterion = CrossEntropyLoss()
     optimizer = torch.optim.SGD(classifier.parameters(), lr=0.001, momentum=0.9)
@@ -74,18 +74,19 @@ def main():
 
         losses = 0.0
 
-         for i, data in enumerate(reduced_train_generator, 0):
-             inputs, labels = data
-             optimizer.zero_grad()
-             outputs = classifier(inputs)
-             loss = criterion(outputs, labels)
-             loss.backward()
-             optimizer.step()
+        for i, data in enumerate(reduced_train_generator, 0):
+            inputs, labels = data
+            optimizer.zero_grad()
+            outputs = classifier(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
 
             losses += loss.item()
 
             if i % 2000 == 1999: 
             print('[%d, %5d] loss: %.3f' % (epoch + 1, i + 1, running_loss / 2000))
+    ###############################################################################
 
     logger.info("Classifier Training Complete")
             
