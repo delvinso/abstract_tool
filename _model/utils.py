@@ -1,4 +1,5 @@
 import io
+import os
 import torch
 import logging
 import json
@@ -120,14 +121,14 @@ def __glove_embed__(sequence, model):
     return embedded
 
 
-def load_embeddings(config):
+def load_embeddings(config, training_generator, validation_generator):
     """Load embeddings either from cache or from scratch
 
     Args:
         config (json): file configurations.
     """    
-
-    if config['cache_folder']:
+    
+    if os.listdir(config['cache_folder']):
         with open(config['cache_folder']+'_'+config['task']+'_training_embeddings.p', 'rb') as cache:
             train_embeddings = pickle.load(cache)
 
@@ -136,11 +137,14 @@ def load_embeddings(config):
     else:
         # get embeddings from scratch
         tokenizer = BertTokenizer.from_pretrained(config['bert_pretrained_weights'])
-        embedding_model = BertForAbstractScreening(config['bert_pretrained_weights']) 
+        embedding_model = AbstractBert(config['bert_pretrained_weights']) 
 
         if torch.cuda.device_count() > 1:
             print("GPUs Available: ", torch.cuda.device_count())
             embedding_model = torch.nn.DataParallel(model, device_ids=[0, 1, 2])
+       
+        use_cuda = torch.cuda.is_available()
+        device = torch.device("cuda:0" if use_cuda else "cpu")
 
         embedding_model.eval().to(device)
 

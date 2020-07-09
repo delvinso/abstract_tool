@@ -60,7 +60,7 @@ def main():
     training_generator, validation_generator = load_data(config, metadata=False)
 
     # get embeddings  
-    train_embeddings, valid_embeddings = load_embeddings(config)
+    train_embeddings, valid_embeddings = load_embeddings(config, training_generator, validation_generator)
 
     # do PCA (TODO: or augmented PCA)
     reduced_train_generator, reduced_valid_generator = get_pca_embeddings(train_embeddings, valid_embeddings)
