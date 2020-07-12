@@ -3,12 +3,14 @@ import os
 import torch
 import logging
 import json
+import pickle
 import argparse
 from pprint import pprint
 
 # 3rd party libraries
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 from torch.utils import data
+from sklearn import decomposition
 from keras.preprocessing.sequence import pad_sequences
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import precision_recall_curve, f1_score, roc_auc_score, auc, average_precision_score, precision_score, recall_score
@@ -66,8 +68,8 @@ def load_data(config, metadata: bool, proportion: float=0.7, max_len: int=256, p
         labels = {}
         # metadata = {}
     
-        partition = {'train': ids[ :int(total_len * 0.7)],
-                     'valid': ids[int(total_len * 0.7): ]
+        partition = {'train': ids[ :int(total_len * 0.7)][:5],
+                     'valid': ids[int(total_len * 0.7): ][:5]
                      }
         for i in dataset.iloc[:,0]:
             labels[i] = dataset.iloc[i][3]
@@ -95,10 +97,10 @@ truncation=True))
     valid_data = dataset[dataset[0].isin(partition['valid'])]
 
     # create train/valid generators
-    training_set = AbstractDataset(train_data, partition['train'], labels, max_len)
+    training_set = AbstractDataset(train_data, partition['train'], labels, is_embedding=False)
     training_generator = DataLoader(training_set, **params)
 
-    validation_set = AbstractDataset(valid_data, partition['valid'], labels,  max_len)
+    validation_set = AbstractDataset(valid_data, partition['valid'], labels, is_embedding=False)
     validation_generator = DataLoader(validation_set, **params)
 
     return training_generator, validation_generator
@@ -202,26 +204,34 @@ def get_pca_embeddings(training_embedding: dict, validation_embedding: dict):
 
     Returns:
         generator: Torch Dataloader
+        tuple: shape of embedding
     """    
+    params = {'batch_size': 32,
+              'shuffle': True,
+              'num_workers': 0
+              }
+
     logger.info(' Doing PCA...')
 
     all_embeddings = np.vstack((training_embedding['embeddings'], validation_embedding['embeddings']))
 
-    pca_model = decomposition.PCA(n_components='mle')
-    all_reduced = pca_model.fit_transform(all_augmented)
+    #pca_model = decomposition.PCA(svd_solver='full', n_components='mle')
+    pca_model = decomposition.PCA()
+    all_reduced = pca_model.fit_transform(all_embeddings)
 
     reduced_train = all_reduced[ :len(training_embedding['embeddings'])]
     reduced_valid = all_reduced[len(training_embedding['embeddings']): ]
 
+    embedding_shape = all_reduced[0].shape
 
     # create generator using custom Dataloader
-    reduced_train_set = AbstractDataset(reduced_train, training_embedding['ids'], training_embedding['labels'])
-    reduced_train_generator = DataLoader(training_set, **params)
+    reduced_train_set = AbstractDataset(reduced_train, training_embedding['ids'], training_embedding['labels'], is_embedding=True)
+    reduced_train_generator = DataLoader(reduced_train_set, **params)
 
-    reduced_valid_set = AbstractDataset(reduced_valid,  validation_embedding['ids'], validation_embedding['labels'])
-    reduced_valid_generator = DataLoader(training_set, **params)
+    reduced_valid_set = AbstractDataset(reduced_valid, validation_embedding['ids'], validation_embedding['labels'], is_embedding=True)
+    reduced_valid_generator = DataLoader(reduced_valid_set, **params)
 
-    return reduced_train_generator, reduced_valid_generator
+    return embedding_shape, reduced_train_generator, reduced_valid_generator
 
 
 def metrics(metric_type: str, preds: list, labels: list):

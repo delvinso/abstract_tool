@@ -63,10 +63,10 @@ def main():
     train_embeddings, valid_embeddings = load_embeddings(config, training_generator, validation_generator)
 
     # do PCA (TODO: or augmented PCA)
-    reduced_train_generator, reduced_valid_generator = get_pca_embeddings(train_embeddings, valid_embeddings)
+    embed_shape, reduced_train_generator, reduced_valid_generator = get_pca_embeddings(train_embeddings, valid_embeddings)
 
     ############################### Train Classifier ###############################
-    classifier = AbstractClassifier(embedding_size=len(reduced_train[0]))
+    classifier = AbstractClassifier(embedding_size=embed_shape[0])
     criterion = CrossEntropyLoss()
     optimizer = torch.optim.SGD(classifier.parameters(), lr=0.001, momentum=0.9)
 

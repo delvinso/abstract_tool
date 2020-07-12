@@ -5,11 +5,12 @@ from torch.utils import data
 from keras.preprocessing.sequence import pad_sequences
 
 class AbstractDataset(data.Dataset):
-  def __init__(self, data, list_IDs: list, labels: dict, max_len: int=128):
+  def __init__(self, data, list_IDs: list, labels: dict, is_embedding: bool, max_len: int=128):
     """Create custom torch Dataset.
     
     Arguments:
     data {array-like} --  DataFrame containing dataset.
+    is_embedding {bool} -- whether embeddings or raw data sent in
     list_IDs {list} -- List of data IDs to be loaded.
     labels {dict} -- Map of data IDs to their labels.
     
@@ -20,14 +21,23 @@ class AbstractDataset(data.Dataset):
     self.max_len = max_len
     self.labels = labels
     self.list_IDs = list_IDs
+    self.is_embedding = is_embedding
 
   def __len__(self):
-      return len(self.list_IDs)
+    return len(self.list_IDs)
 
   def __getitem__(self, index):
-      # Select sample
-      ID = self.list_IDs[index]
+    # Select sample
+    ID = self.list_IDs[index]
 
+    if self.is_embedding: 
+      X = self.data
+      print(self.labels)
+      print(ID)
+      y = self.labels[ID]
+      
+      return self.list_IDs, torch.tensor(X), torch.tensor(y)
+    else: 
       # Load data and get metadata
       X = self.data[self.data[0] == ID][1].values
       Y = self.data[self.data[0] == ID][2].values.tolist()
