@@ -77,6 +77,7 @@ def main():
         losses = 0.0
 
         for i, data in enumerate(reduced_train_generator, 0):
+            print(data.shape)
             inputs, labels = data
             optimizer.zero_grad()
             outputs = classifier(inputs)

@@ -5,7 +5,7 @@ from torch.utils import data
 from keras.preprocessing.sequence import pad_sequences
 
 class AbstractDataset(data.Dataset):
-  def __init__(self, data, list_IDs: list, labels: dict, is_embedding: bool, max_len: int=128):
+  def __init__(self, data, labels, is_embedding: bool, list_IDs: list=None, max_len: int=128):
     """Create custom torch Dataset.
     
     Arguments:
@@ -27,14 +27,13 @@ class AbstractDataset(data.Dataset):
     return len(self.list_IDs)
 
   def __getitem__(self, index):
-
     if self.is_embedding: 
       X = self.data
       # print(self.labels)
       # print(ID)
       y = self.labels
       
-      return self.list_IDs, torch.tensor(X), torch.tensor(y)
+      return torch.tensor(X), torch.tensor(y)
     else: 
       # Load data and get metadata
       X = self.data[self.data[0] == ID][1].values
