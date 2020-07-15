@@ -56,14 +56,16 @@ def main():
     torch.manual_seed(config['seed'])
     # torch.cuda.manual_seed_all(SEED)
 
-    # load data 
-    training_generator, validation_generator = load_data(config, metadata=False)
+    # load data     
+    partition, training_generator, validation_generator = load_data(config, metadata=False)
 
     # get embeddings  
     train_embeddings, valid_embeddings = load_embeddings(config, training_generator, validation_generator)
 
     # do PCA (TODO: or augmented PCA)
-    embed_shape, reduced_train_generator, reduced_valid_generator = get_pca_embeddings(train_embeddings, valid_embeddings)
+    embed_shape, reduced_train_generator, reduced_valid_generator = get_pca_embeddings(partition, \
+                                                                                       train_embeddings, \
+                                                                                       valid_embeddings)
 
     ############################### Train Classifier ###############################
     classifier = AbstractClassifier(embedding_size=embed_shape[0])

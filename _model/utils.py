@@ -41,6 +41,7 @@ def load_data(config, metadata: bool, proportion: float=0.7, max_len: int=256, p
         labels {dict} -- (default: {None})
 
     Returns:
+        partition {dict} -- list of ids in train and valid datasets
         torch.utils.data.Dataset -- dataset
     """
 
@@ -103,7 +104,7 @@ truncation=True))
     validation_set = AbstractDataset(valid_data, partition['valid'], labels, is_embedding=False)
     validation_generator = DataLoader(validation_set, **params)
 
-    return training_generator, validation_generator
+    return partition, training_generator, validation_generator
 
 
 def __pad__(sequence, max_l):
@@ -195,10 +196,11 @@ def get_bert_embeddings(data_generator, embedding_model: torch.nn.Module):
     return embeddings
 
 
-def get_pca_embeddings(training_embedding: dict, validation_embedding: dict):
+def get_pca_embeddings(partition: dict, training_embedding: dict, validation_embedding: dict):
     """Reduced embeddings using PCA. 
 
     Args:
+        partition (dict): dictionary containing partition of IDs for training and valid embeddings
         training_embedding (dict): dictionary containing training embeddings
         validation_embedding (dict): dictionary containing validation embeddings
 
@@ -225,10 +227,10 @@ def get_pca_embeddings(training_embedding: dict, validation_embedding: dict):
     embedding_shape = all_reduced[0].shape
 
     # create generator using custom Dataloader
-    reduced_train_set = AbstractDataset(reduced_train, training_embedding['ids'], training_embedding['labels'], is_embedding=True)
+    reduced_train_set = AbstractDataset(reduced_train, partition['train'], training_embedding['labels'], is_embedding=True)
     reduced_train_generator = DataLoader(reduced_train_set, **params)
 
-    reduced_valid_set = AbstractDataset(reduced_valid, validation_embedding['ids'], validation_embedding['labels'], is_embedding=True)
+    reduced_valid_set = AbstractDataset(reduced_valid, partition['valid'], validation_embedding['labels'], is_embedding=True)
     reduced_valid_generator = DataLoader(reduced_valid_set, **params)
 
     return embedding_shape, reduced_train_generator, reduced_valid_generator

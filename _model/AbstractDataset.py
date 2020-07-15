@@ -27,14 +27,12 @@ class AbstractDataset(data.Dataset):
     return len(self.list_IDs)
 
   def __getitem__(self, index):
-    # Select sample
-    ID = self.list_IDs[index]
 
     if self.is_embedding: 
       X = self.data
       # print(self.labels)
       # print(ID)
-      y = self.labels[ID][0]
+      y = self.labels
       
       return self.list_IDs, torch.tensor(X), torch.tensor(y)
     else: 
