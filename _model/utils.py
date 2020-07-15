@@ -98,10 +98,10 @@ truncation=True))
     valid_data = dataset[dataset[0].isin(partition['valid'])]
 
     # create train/valid generators
-    training_set = AbstractDataset(train_data, labels, is_embedding=False, partition['train'],)
+    training_set = AbstractDataset(train_data, labels, partition['train'], is_embedding=False)
     training_generator = DataLoader(training_set, **params)
 
-    validation_set = AbstractDataset(valid_data, labels, is_embedding=False, partition['valid'])
+    validation_set = AbstractDataset(valid_data, labels,  partition['valid'], is_embedding=False)
     validation_generator = DataLoader(validation_set, **params)
 
     return partition, training_generator, validation_generator
