@@ -32,9 +32,9 @@ class AbstractDataset(data.Dataset):
 
     if self.is_embedding: 
       X = self.data
-      print(self.labels)
-      print(ID)
-      y = self.labels[ID]
+      # print(self.labels)
+      # print(ID)
+      y = self.labels[ID][0]
       
       return self.list_IDs, torch.tensor(X), torch.tensor(y)
     else: 
