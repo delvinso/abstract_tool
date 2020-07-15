@@ -5,7 +5,7 @@ from torch.utils import data
 from keras.preprocessing.sequence import pad_sequences
 
 class AbstractDataset(data.Dataset):
-  def __init__(self, data, labels, is_embedding: bool, list_IDs: list=None, max_len: int=128):
+  def __init__(self, data, labels, list_IDs: list=None, is_embedding: bool, max_len: int=128):
     """Create custom torch Dataset.
     
     Arguments:
