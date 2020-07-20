@@ -39,4 +39,4 @@ class AbstractDataset(data.Dataset):
       z = self.labels[ID]
 
       # X: data, Y: metadata, z: label
-      return self.list_IDs, torch.tensor(X[0]['input_ids']), Y, torch.tensor(z) 
+      return ID, torch.tensor(X[0]['input_ids']), Y, torch.tensor(z)

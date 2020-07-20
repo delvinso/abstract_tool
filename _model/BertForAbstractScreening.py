@@ -7,7 +7,7 @@ from torch.nn import CrossEntropyLoss
 
 class BertForAbstractScreening(nn.Module):
   
-    def __init__(self, pretrained_weights: str='bert-base-uncased', num_labels: int=2):
+    def __init__(self, vocab: str='bert-base-uncased', num_labels: int=2):
         """ BERT model with customizable layers for classification. 
 
         Keyword Arguments:
@@ -17,9 +17,13 @@ class BertForAbstractScreening(nn.Module):
         super(BertForAbstractScreening, self).__init__()
     
         self.num_labels = num_labels
+        self.vocab = vocab
         # output: last_hidden_state, pooler_output, hidden_states
-        self.bert = BertModel.from_pretrained(pretrained_weights, output_hidden_states=True)
-        self.dropout = nn.Dropout(0.3)
+
+
+        config = AutoConfig.from_pretrained(vocab, output_hidden_states=True)
+        self.bert = AutoModel.from_pretrained(vocab, config = config)
+        # self.dropout = nn.Dropout(0.3)
 
         ########### NOTE, optional: add or change classifier on top of BERT here ###########
         # self.classifier = nn.Linear(config.hidden_size, num_labels)

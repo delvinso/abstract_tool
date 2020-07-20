@@ -9,16 +9,12 @@ from pprint import pprint
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 from torch.utils import data
 from keras.preprocessing.sequence import pad_sequences
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import precision_recall_curve, f1_score, roc_auc_score, auc, average_precision_score, precision_score, recall_score
 from transformers import *
 from tqdm import tqdm, trange
 from torch.nn import CrossEntropyLoss
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use('Agg')
 import torchtext 
 
 # custom
@@ -142,8 +138,7 @@ def get_embeddings(data_generator, embedding_model: torch.nn.Module):
                                                     local_labels.to(device).long()
 
             augmented_embeddings = embedding_model(local_data)#, local_meta)
-
-            embeddings['ids'].extend(local_ids)
+            embeddings['ids'].extend(np.array(local_ids))
             embeddings['embeddings'].extend(np.array(augmented_embeddings.detach().cpu()))
             embeddings['labels'].extend(np.array(local_labels.detach().cpu().tolist()))
 
