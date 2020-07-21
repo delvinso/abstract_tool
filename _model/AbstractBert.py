@@ -7,7 +7,7 @@ from torch.nn import CrossEntropyLoss
 
 class AbstractBert(nn.Module):
   
-    def __init__(self, pretrained_weights: str='bert-base-uncased', num_labels: int=2):
+    def __init__(self, vocab: str='bert-base-uncased', num_labels: int=2):
         """ BERT model with customizable layers for classification. 
 
         Keyword Arguments:
@@ -17,10 +17,14 @@ class AbstractBert(nn.Module):
         super(AbstractBert, self).__init__()
     
         self.num_labels = num_labels
+        self.vocab = vocab
 
         # output: last_hidden_state, pooler_output, hidden_states
-        self.bert = BertModel.from_pretrained(pretrained_weights, output_hidden_states=True)
-        self.dropout = nn.Dropout(0.3)
+        config = AutoConfig.from_pretrained(vocab, output_hidden_states=True)
+        self.bert = AutoModel.from_pretrained(vocab, config = config)
+
+        # self.bert = BertModel.from_pretrained(pretrained_weights, output_hidden_states=True)
+        # self.dropout = nn.Dropout(0.3)
 
         ########### NOTE, optional: add or change classifier on top of BERT here ###########
         # self.classifier = nn.Linear(config.hidden_size, num_labels)
@@ -57,20 +61,21 @@ class AbstractBert(nn.Module):
         # pooled_output = self.dropout(pooled_output)
 
         # TODO: better metric than average? get an average of all the items in the augmented embeddings
-        if augment_ids is not None:
-            augment_ids = [x[0].clone().detach().requires_grad_(True) for x in augment_ids]
-            avg_emb = torch.mean(torch.stack(augment_ids), dim=0)
-            # concat the augementation to the pooled output
-            pooled_output_augmented = torch.cat((pooled_output, avg_emb), dim=1)
+        # if augment_ids is not None:
+        #     augment_ids = [x[0].clone().detach().requires_grad_(True) for x in augment_ids]
+        #     avg_emb = torch.mean(torch.stack(augment_ids), dim=0)
+        #     # concat the augementation to the pooled output
+        #     pooled_output_augmented = torch.cat((pooled_output, avg_emb), dim=1)
 
             ########### NOTE, OPTIONAL: send in the augmented embeddings through classifier ###########
             # logits = self.classifier(pooled_output_augmented)
             # return logits
             ########### NOTE, OPTIONAL: send in the augmented embeddings through classifier ###########
 
-            return pooled_output_augmented
-        else: 
-            return pooled_output
+        #     return pooled_output_augmented
+        # else: 
+
+        return pooled_output
 
 
         

@@ -98,10 +98,10 @@ truncation=True))
     valid_data = dataset[dataset[0].isin(partition['valid'])]
 
     # create train/valid generators
-    training_set = AbstractDataset(data=train_data, labels=labels, is_embedding=False, list_IDs=partition['train'])
+    training_set = AbstractDataset(data=train_data, labels=labels, list_IDs=partition['train'])
     training_generator = DataLoader(training_set, **params)
 
-    validation_set = AbstractDataset(data=valid_data, labels=labels, is_embedding=False, list_IDs=partition['valid'])
+    validation_set = AbstractDataset(data=valid_data, labels=labels, list_IDs=partition['valid'])
     validation_generator = DataLoader(validation_set, **params)
 
     return partition, training_generator, validation_generator
@@ -226,10 +226,10 @@ def get_pca_embeddings(training_embedding: dict, validation_embedding: dict):
     embedding_shape = all_reduced[0].shape
 
     # create generator using custom Dataloader
-    reduced_train_set = AbstractDataset(reduced_train, training_embedding['labels'], is_embedding=True)
+    reduced_train_set = EmbeddingsDataset(reduced_train, training_embedding['labels'])
     reduced_train_generator = DataLoader(reduced_train_set, **params)
 
-    reduced_valid_set = AbstractDataset(reduced_valid, validation_embedding['labels'], is_embedding=True)
+    reduced_valid_set = EmbeddingsDataset(reduced_valid, validation_embedding['labels'])
     reduced_valid_generator = DataLoader(reduced_valid_set, **params)
 
     return embedding_shape, reduced_train_generator, reduced_valid_generator
