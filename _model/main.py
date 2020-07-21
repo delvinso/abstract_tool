@@ -63,9 +63,7 @@ def main():
     train_embeddings, valid_embeddings = load_embeddings(config, training_generator, validation_generator)
 
     # do PCA (TODO: or augmented PCA)
-    embed_shape, reduced_train_generator, reduced_valid_generator = get_pca_embeddings(partition, \
-                                                                                       train_embeddings, \
-                                                                                       valid_embeddings)
+    embed_shape, reduced_train_generator, reduced_valid_generator = get_pca_embeddings(train_embeddings, valid_embeddings)
 
     ############################### Train Classifier ###############################
     classifier = AbstractClassifier(embedding_size=embed_shape[0])
@@ -75,15 +73,17 @@ def main():
     for epoch in range(config['epochs']):
 
         losses = 0.0
-
-        for i, data in enumerate(reduced_train_generator, 0):
-            print(data.shape)
-            inputs, labels = data
+        i = 0
+        for local_data, local_labels in reduced_train_generator:
+            local_data, local_labels = local_data.to(device).float().squeeze(1), \
+                                                    local_labels.to(device).float()
+            print(local_labels)
             optimizer.zero_grad()
-            outputs = classifier(inputs)
-            loss = criterion(outputs, labels)
+            outputs = classifier(local_data)
+            loss = criterion(outputs, local_labels)
             loss.backward()
             optimizer.step()
+            i += 1 
 
             losses += loss.item()
 

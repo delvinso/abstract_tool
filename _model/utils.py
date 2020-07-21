@@ -53,7 +53,7 @@ def load_data(config, metadata: bool, proportion: float=0.7, max_len: int=256, p
     # convert labels to integer and drop nas
     dataset.iloc[:, 3] = pd.to_numeric(dataset.iloc[:, 3], errors = 'coerce' )
     dataset = dataset[~ dataset[2].isnull()]
-    print(dataset)
+    # print(dataset)
 
     # recreate the first column with the reset index.
     dataset = dataset[(dataset.iloc[:, 3] == 1) | (dataset.iloc[:, 3] == 0)] \
@@ -186,13 +186,13 @@ def get_bert_embeddings(data_generator, embedding_model: torch.nn.Module):
             local_data, local_meta, local_labels =  local_data.to(device).long().squeeze(1), \
                                                     local_meta, \
                                                     local_labels.to(device).long()
-
+            print(local_data.shape, local_labels.shape, local_labels)
             augmented_embeddings = embedding_model(local_data)#, local_meta)
 
             embeddings['ids'].extend(local_ids)
             embeddings['embeddings'].extend(np.array(augmented_embeddings.detach().cpu()))
             embeddings['labels'].extend(np.array(local_labels.detach().cpu().tolist()))
-
+            # print('\n\n\n', embeddings['labels'])
     return embeddings
 
 
