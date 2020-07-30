@@ -31,7 +31,6 @@ from AbstractBert import AbstractBert
 from utils import load_data, metrics, load_embeddings, get_bert_embeddings, get_pca_embeddings
 
 
-""" TODO: TESTING MODULE. """
 
 def main():
 
