@@ -5,30 +5,25 @@ import json
 import argparse
 import pickle
 import os
-from pprint import pprint
+import time
 
 # 3rd party libraries
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
-from keras.preprocessing.sequence import pad_sequences
+from sklearn.model_selection import GridSearchCV
+from sklearn import  decomposition
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn import cluster, datasets, mixture, decomposition
-from sklearn.neighbors import kneighbors_graph, KNeighborsClassifier
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import precision_recall_curve, f1_score, roc_auc_score, auc, average_precision_score, precision_score, recall_score
-from transformers import *
-from tqdm import tqdm, trange
-from torch.nn import CrossEntropyLoss
+from transformers import AutoTokenizer
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use('Agg')
 
 # custom
 from AbstractDataset import AbstractDataset
-from BertForAbstractScreening import BertForAbstractScreening
-from data_tools import load_data, metrics, get_embeddings
+from AbstractClassifier import AbstractClassifier
+from AbstractBert import AbstractBert
+from utils import load_data, metrics, load_embeddings, get_bert_embeddings, get_pca_embeddings, save_embeddings
 
 # for dealing with multiprocessing/len(ancdata) error
 import resource
@@ -37,219 +32,256 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (2048*2, rlimit[1]))
 
 '''
 TODO: Add function to do UMAP/embedding visualization  
-TODO: incorporate phase 2
+TODO: Add 1D CNN 
+TODO: Add augmented PCA
 '''
 
-def main():
+def main(args):
 
-    # set up parser
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config_dir', help='path to the json config file')
-    args = parser.parse_args()
-
-    # load config file
+    # load config file 
     with open(args.config_dir) as f:
         config = json.load(f)
 
-    # default params
-    TRAIN_FILE = config['train_file']
-    TEST_FILE = config['test_file']
-    TYPE = TRAIN_FILE.split('/')[-1][:-4] # retrieve file name without the extension
-    MAX_EPOCHS = config['epochs']
-    MAX_LEN = config['max_len']
-    SEED = config['seed']
-    PRETRAINED_KNN = config['clustering_model']
-    TRAIN_MODE = config['train']
-    TEST_MODE = config['test']
-    OUT_DIR = config['out_dir']
+    # set seeds
+    np.random.seed(config['seed'])
+    torch.manual_seed(config['seed'])
 
-    if not os.path.exists(OUT_DIR): os.makedirs(OUT_DIR)
+    # create output directories
+    if not os.path.exists(config['out_dir']): os.makedirs(config['out_dir'])
+    if not os.path.exists(config['embedding_cache']): os.makedirs(fconfig['embedding_cache'])
 
     # logging.basicConfig(filename='example.log', filemode='w', level=logging.DEBUG) # if you want to pipe the logging to a file
-    #TODO take as parameter to json
-    log_out = os.path.join(OUT_DIR, 'model.log')
+    log_out = os.path.join(config['out_dir'], 'model.log')
     logging.basicConfig(level=logging.INFO, filename = log_out)
     logger = logging.getLogger(__name__)
 
-    use_cuda = torch.cuda.is_available()
-    device = torch.device("cuda:0" if use_cuda else "cpu")
+    # load data 
+    bert_models = {'bert':'allenai/scibert_scivocab_uncased',
+                   'roberta' : 'allenai/biomed_roberta_base'}
+    vocab = bert_models[config['bert_model']]
 
-    # model specific params
-    PRETRAINED_WEIGHTS = 'allenai/scibert_scivocab_uncased'
-    N_CLUSTERS = 2
-    COV_TYPE = 'full'
+    partition, training_generator, validation_generator = load_data(config, vocab)
 
-    np.random.seed(SEED)
-    torch.manual_seed(SEED)
-    # torch.cuda.manual_seed_all(SEED)
+    # get the embeddings (either from scratch, or from cache)
+    logger.info(' Getting BERT embeddings...')
+    train_embeddings, valid_embeddings = load_embeddings(config, bert_models, training_generator, validation_generator)
+   
+    # dimension reduction: PCA (either from scratch, or from cache)
+    if config["do_pca"]:
+        logger.info(' Reducing embedding dimensions...')
+        embed_shape, train_embeddings, valid_embeddings = get_pca_embeddings(train_embeddings, valid_embeddings)
 
-    # config checks
-    if not TRAIN_MODE and not PRETRAINED_KNN:
-        logger.error('Must provide path to a trained clustering model if training mode is False.')
+    logger.info(' Dataset is {} and PCA was performed: {}'.format(name, config["do_pca"]))
+    logger.info(f'\n Num. training samples: {len(training_generator)} \
+                  \n Num. validation samples: {len(validation_generator)}')
 
-    if TEST_MODE and not TEST_FILE:
-        logger.error('Must provide path to a testing file with data if testing mode is True.')
-
-    # load models and tokenizer
-    tokenizer = BertTokenizer.from_pretrained(PRETRAINED_WEIGHTS)
-    embedding_model = BertForAbstractScreening(PRETRAINED_WEIGHTS)
-
-    # multiple GPUs
-    if torch.cuda.device_count() > 1:
-        print("GPUs Available: ", torch.cuda.device_count())
-        embedding_model = torch.nn.DataParallel(embedding_model, device_ids=[0, 1, 2])
-
-    embedding_model.eval().to(device)
-
-    # load data
-    training_generator, validation_generator = load_data(TRAIN_FILE, tokenizer, max_len = MAX_LEN)
-    logger.info('Dataset is {}'.format(TYPE))
-    logger.info(f'\nNum. training samples: {len(training_generator)} \
-                  \nNum. validation samples: {len(validation_generator)}')
-
-    ######## BERT embeddings and PCA ########
-
-    if TEST_MODE:
-        test_generator, _ = load_data(TEST_FILE, tokenizer, max_len = MAX_LEN, proportion=0)
-        logger.info(f'\nNum. testing samples: {len(test_generator)}')
-
-        # get BERT embeddings
-        logger.info(' Getting augmented BERT embeddings...')
-        augmented_train = get_embeddings(training_generator, embedding_model)
-        augmented_valid = get_embeddings(validation_generator, embedding_model)
-        augmented_test = get_embeddings(test_generator, embedding_model)
-
-        logger.info(' Standardizing ')
-        # standardizing since KNN is non-parametric and is not robust to feature parameters
-        ss = StandardScaler()
-        train_embed_ss = ss.fit_transform(augmented_train['embeddings'])
-        valid_embed_ss = ss.transform(augmented_valid['embeddings'])
-        test_reduc_ss = ss.transform(augmented_test['embeddings'])
-
-        # Dimension reduction: PCA or UMAP (?)
-        logger.info(' Doing PCA...')
-        pca_model = decomposition.PCA(n_components = 0.99) # this can be a parameter down the road, but for debugging it's fine
-        train_reduc = pca_model.fit_transform(train_embed_ss)
-        val_reduc = pca_model.transform(valid_embed_ss)
-        test_reduc = pca_model.transform(test_reduc_ss)
-
-        # all_augmented = np.hstack((augmented_train['embeddings'], \
-        #                            augmented_valid['embeddings'], \
-        #                            augmented_test['embeddings']))
-
-        # Dimension reduction: PCA or UMAP (?)
-        # FIX THIS.
-        # logger.info(' Doing PCA...')
-        # pca_model = decomposition.PCA(n_components='mle')
-        # all_reduced = pca_model.fit_transform(all_augmented)
-        #
-        # reduced_train = all_reduced[ :len(augmented_train['embeddings'])]
-        # reduced_valid = all_reduced[len(augmented_valid['embeddings']): -len(augmented_test['embeddings'])]
-        # reduced_test = all_reduced[-len(augmented_test['embeddings']): ]
+    if config.train:
+        _train(config, args.name, logger, train_embeddings, valid_embeddings)
+    elif config.test:
+        # _test(config, args.name, logger)
+        pass
     else:
-        # get BERT embeddings
-        logger.info(' Getting augmented BERT embeddings...')
-        augmented_train = get_embeddings(training_generator, embedding_model)
-        augmented_valid = get_embeddings(validation_generator, embedding_model)
+        raise logger.error(f"Neither train nor test mode activated.")
 
-        # save down embeddings as a pickle
-        with open(os.path.join(OUT_DIR, '{}_test_aug_valid.pkl'.format(TYPE)), 'wb') as handle:
-            pickle.dump(augmented_valid, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-        with open(os.path.join(OUT_DIR, '{}_test_aug_train.pkl'.format(TYPE)), 'wb') as handle:
-            pickle.dump(augmented_train, handle, protocol=pickle.HIGHEST_PROTOCOL)
+def _train(config, name, logger, train, valid):
+    """ Train classifier """
 
-        logger.info(' Standardizing ')
-        # standardizing since KNN is non-parametric and is not robust to feature parameters
-        ss = StandardScaler()
-        train_embed_ss = ss.fit_transform(augmented_train['embeddings'])
-        valid_embed_ss = ss.transform(augmented_valid['embeddings'])
+    # get the classifier
+    model_type = config['model_type']
+    logger.info(f' Classifier type: {model_type}')
 
-        logger.info(' Doing PCA...')
-        pca_model = decomposition.PCA(n_components = 0.99) # this can be a parameter down the road, but for debugging it's fine
-        train_reduc = pca_model.fit_transform(train_embed_ss)
-        val_reduc = pca_model.transform(valid_embed_ss)
+    # classifiers
+    probabilistic_classifiers = {'knn' : (KNeighborsClassifier(n_jobs=128),
+                                         {'n_neighbors': [3, 5, 7, 11, 13, 15], 'weights': ['distance']}),
 
-    ######## BERT embeddings and PCA ########
+                                'lasso': (LogisticRegression(n_jobs=128, penalty='l1', solver = 'saga',
+                                                                random_state=0, verbose=1, max_iter=5000, tol=0.001),
+                                         {'C': [0.001, 0.01, 0.1, 1, 10, 100] }),
 
-    ######## KNN ########
-    if TRAIN_MODE:
+                                'ridge': (LogisticRegression(n_jobs=128, penalty='l2', solver = 'saga',
+                                                                random_state=0, verbose=1, max_iter=5000, tol=0.001),
+                                         {'C': [0.001, 0.01, 0.1, 1, 10, 100]}),
 
-        logger.info(' Clustering with grid search...')
-        # initialize model
-        clustering_model = KNeighborsClassifier(  n_jobs = 32)
-        # optimal # of neighbours? this can be a dataset specific thing. no need to identify a single value..
-        param_grid = {'n_neighbors': [3, 5, 7, 11, 13, 15],
-                      'weights': ['distance']}
-        # grid search arguments
-        grids = GridSearchCV(clustering_model,
-                             param_grid,
-                             cv= 10 ,
-                             scoring = {'average_precision', 'roc_auc'},
-                             refit = 'roc_auc')
+                                'rf': (RandomForestClassifier(n_jobs=128, verbose=1, random_state=0),
+                                        {'n_estimators': [500, 750, 1000],
+                                         'max_features': ["sqrt", 0.05, 0.1],
+                                         'min_samples_split': [2, 4, 8]})}
+
+    # neural network based classifiers
+    dnn_classifiers = {'cnn' : Classifier(config, 'cnn', embedding_size=embed_shape[0]),
+                       'fcn' : Classifier(config, 'fcn')}
+
+    # training procedure based on classifier type
+    if model_type in probabilistic_classifiers:
+        classifier, param_grid = probabilistic_classifiers[model_type
+        logger.info(classifier)
+        logger.info(param_grid)
+
+         # grid search arguments
+        grids = GridSearchCV(classifier, \
+                            param_grid, \
+                            cv=10, \
+                            scoring={'average_precision', 'roc_auc'}, \
+                            refit='roc_auc')
+
         # perform the grid search
-        grids.fit(train_reduc, augmented_train['labels'])
+        start_time = time.time()
+        grids.fit(valid[:0], train[:1])
+        end_time = time.time()
+
+        cv_time = end_time - start_time
+        logging.info(' CV Parameter search took {} minutes'.format(cv_time/60)) # seconds
+
         # take cv results into a dataframe and slice row with best parameters
-        cv_res = pd.DataFrame.from_dict(grids.cv_results_)#.groupby('param_n_neighbors').agg('mean').reset_index()
+        cv_res = pd.DataFrame.from_dict(grids.cv_results_)
         cv_best_res = cv_res[cv_res.rank_test_roc_auc == 1]
 
-        logger.info((f"KNN Training:\n\tAUROC: {cv_best_res[['mean_test_roc_auc']].iloc[0]['mean_test_roc_auc']}\
-                                    \n\tAP: {cv_best_res[['mean_test_average_precision']].iloc[0]['mean_test_average_precision']}")
-                    )
+        logger.info((f"Model: {config['model_type']}\n\tBest CV Params: {cv_best_res.params}\n\tTraining:\n\tAUROC: {cv_best_res[['mean_test_roc_auc']].iloc[0]['mean_test_roc_auc']}\
+                                    \n\tAP: {cv_best_res[['mean_test_average_precision']].iloc[0]['mean_test_average_precision']}"))
+
+        # get predictions (posterior probability)
+        all_predictions = [grids.predict_proba(valid[:0]), grids.predict(valid[:0]),  valid[:1]]
+        train_fitted = [grids.predict_proba(train[:0]), grids.predict(train[:0]), train[:1]]
+
+        train_df = pd.DataFrame({
+            'model_probs': train_fitted[0][:, 1],
+            'ground_truth': augmented_train['labels'],
+            'set': 'training_fitted',
+            'data': name,
+            'pca': config['pca'],
+            'model_type': config['model_type'],
+            'bert_model': config['bert_model'],
+            'ids': augmented_train['ids']
+        })
+
+        val_df = pd.DataFrame({
+            'model_probs': all_predictions[0][:, 1],
+            'ground_truth': augmented_valid['labels'],
+            'set': 'validation',
+            'data': name,
+            'pca': config['pca'],
+            'model_type': config['model_type'],
+            'bert_model': config['bert_model'],
+            'ids': augmented_valid['ids']
+        })
+        
+        combined_df = pd.concat([train_df, val_df], axis = 0)
+
+        combined_df.to_csv(os.path.join(OUT_DIR, '{}_preds.csv'.format(TYPE)))
+            
+        # check prediction performance on the validation data
+        logger.info(' Getting metrics...')
+        
+        # AUROC and AUPRC are calculated with P(y == 1) so we want to use index 0 (probs) instead of 1 (thresholded classes) of all_predictions
+        roc_auc = metrics('roc_auc', preds = all_predictions[0][:, 1], labels = all_predictions[2])
+        ap = metrics('ap', preds = all_predictions[0][:, 1], labels = all_predictions[2])
+
+        roc_auc2 = metrics('roc_auc', preds = train_fitted[0][:, 1], labels = train_fitted[2])
+        ap2 = metrics('ap', preds = train_fitted[0][:, 1], labels = train_fitted[2])
+
+        logger.info(f' Validation:\n\tAUROC: {roc_auc} \n\tAP: {ap}')
+
+        run_res = pd.DataFrame([roc_auc, ap,
+                        roc_auc2, ap2,
+                        cv_best_res[['mean_test_roc_auc']].iloc[0]['mean_test_roc_auc'],  cv_best_res[['mean_test_average_precision']].iloc[0]['mean_test_average_precision']])
+        run_res['metrics'] = ['auroc', 'auprc', 'auroc', 'auprc', 'auroc', 'auprc']
+        run_res['set'] = ['validation', 'validation', 'training_fitted', 'training_fitted', 'training', 'training']
+        run_res['data'] = name
+        run_res['PCA'] = config["PCA"]
+        run_res['model_type'] = config["model_type"]
+        run_res['bert_model'] =  config["bert_model"]
+        run_res['cv_time'] = cv_time
+        run_res['X_shape'] = train_reduc.shape[1] if PCA == 'use_pca' else train_embed_ss.shape[1]
+        run_res['params'] = str(param_grid) # the parameter grid input
+        run_res['best_params'] = str(cv_best_res[['params']].iloc[0, 0])# the params for the best CV model
+        run_res['grids'] = str(grids) # sanity check that all parameters were actually passed into gridsearchcv
+
+        run_res.to_csv(os.path.join(config['out_dir'], '{}_results.csv'.format(name)))
+
+    elif config['model_type'] in dnn_classifiers: # if DNN, no need to do CV
+        classifier = dnn_classifiers[model_type]
+        criterion = CrossEntropyLoss()
+
+        logger.info(classifier)
+        logger.info(classifier.params())
+
+        optimizer = torch.optim.SGD(classifier.parameters(), lr=0.001, momentum=0.9)
+
+        for epoch in range(config['epochs']):
+
+            losses = 0.0
+            i = 0
+            for local_data, local_labels in train:
+                local_data, local_labels = local_data.to(device).float().squeeze(1), \
+                                                        local_labels.to(device).float()
+                print(local_labels)
+                optimizer.zero_grad()
+                outputs = classifier(local_data)
+                loss = criterion(outputs, local_labels)
+                loss.backward()
+                optimizer.step()
+                i += 1 
+
+                losses += loss.item()
+
+                if i % 2000 == 1999: 
+                    print('[%d, %5d] loss: %.3f' % (epoch + 1, i + 1, running_loss / 2000))
+
+        logger.info("Classifier Training Complete")
+                
+        # save model
+        torch.save(classifier.state_dict(), config["pretrained_classifier"_]+config['model_type']+'.p')
+
+        # check prediction performance on the validation data 
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for data in valid:
+                embeddings, labels = data
+                outputs = net(embeddings)
+                _, predicted = torch.max(outputs.data, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+
+            logger.info(' Getting metrics...')
+            roc_auc = metrics('roc_auc', preds = all_predictions[1], labels = all_predictions[2])
+            ap = metrics('ap', preds = all_predictions[1], labels = all_predictions[2])
+            
+            logger.info(f'AUROC: {np.mean(roc_auc)} \nAP: {np.mean(ap)}')
+
+            run_res = pd.DataFrame([roc_auc, ap])
+            run_res['metrics'] = ['auroc', 'auprc']
+            run_res['set'] = ['validation', 'validation', 'training_fitted', 'training_fitted', 'training', 'training']
+            run_res['data'] = name
+            run_res['PCA'] = config["PCA"]
+            run_res['model_type'] = config["model_type"]
+            run_res['bert_model'] =  config["bert_model"]
+            run_res['cv_time'] = None
+            run_res['X_shape'] = train.shape[1] 
+            run_res['params'] = None
+            run_res['best_params'] = None
+            run_res['grids'] = None
+
+            run_res.to_csv(os.path.join(config['out_dir'], '{}_results.csv'.format(name)))
     else:
-        # load pretrained KNN (pickled)
-        clustering_model = pickle.load(PRETRAINED_KNN)
-    ######## KNN ########
-
-    # predict the posterior probability of the validation embeddings, check label..
-    all_predictions = [grids.predict_proba(val_reduc),
-                       grids.predict(val_reduc),
-                       augmented_valid['labels']]
-
-    # check prediction performance on the validation data
-    logger.info(' Getting metrics...')
-    # AUROC and AUPRC are calculated with P(y == 1) so we want to use index 0 instead of 1 of all_predictions
-    roc_auc = metrics('roc_auc', preds = [x[1] for x in all_predictions[0]], labels = all_predictions[2])
-    ap = metrics('ap', preds = [x[1] for x in all_predictions[0]], labels = all_predictions[2])
-
-    logger.info(f'KNN Validation:\n\tAUROC: {roc_auc} \n\tAP: {ap}')
-
-    # --- saving down results for debugging ----
-    run_res = pd.DataFrame([roc_auc,
-                            ap,
-                            cv_best_res[['mean_test_roc_auc']].iloc[0]['mean_test_roc_auc'],
-                            cv_best_res[['mean_test_average_precision']].iloc[0]['mean_test_average_precision']])
-    run_res['metrics'] = ['auroc', 'auprc', 'auroc', 'auprc']
-    run_res['set'] = ['validation', 'validation', 'training', 'training']
-    run_res['data'] = TYPE
-
-    run_res.to_csv(os.path.join(OUT_DIR, '{}_results.csv'.format(TYPE)))
-
-
-    # save all models
-    #
-    #     pickle.dump(clustering_model)# embedding_model.module.save_state_dict('embedding_BFAS_'+TYPE+'.pt')
-
-    # testing data, one by one, evaluate confidence in prediction
-    # present non_confident_set back to user for labeling 
-
-    # # TODO: confidence score and threshold score following this paper: https://bit.ly/2Zg3mVL 
-    # if TEST_MODE: 
-    #     non_confident_set = {}
-
-    #     for abstract_id, abstract in zip(reduced_test, augmented_test['embeddings']):
-    #         predicted_label = clustering_model.predict(abstract)
-    #         confidence = get_knn_confidence(abstract)
-
-    #         if confidence < threshold: 
-    #             non_confident_set.append([abstract_id, abstract, predicted_label])
-
-    #     with open('to_be_labeled.txt', 'w+') as f:
-    #         f.write(non_confident_set)
+        raise ValueError('Model not implemented yet')
 
 
 if __name__ == '__main__':
-    main()
+
+    # check cuda
+    use_cuda = torch.cuda.is_available()
+    device = torch.device("cuda:0" if use_cuda else "cpu")
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config_dir', help='path to the json config file')
+    parser.add_argument('--name', help='experiment name')
+
+    args = parser.parse_args()
+
+    main(args)
+
 
 
 
