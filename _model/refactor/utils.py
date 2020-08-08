@@ -12,6 +12,7 @@ from torch.utils.data import TensorDataset, DataLoader, RandomSampler, Sequentia
 from torch.utils import data
 from sklearn import decomposition
 from keras.preprocessing.sequence import pad_sequences
+from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import precision_recall_curve, f1_score, roc_auc_score, auc, average_precision_score, precision_score, recall_score
 from transformers import *
@@ -29,7 +30,7 @@ from AbstractDataset import AbstractDataset
 from EmbeddingsDataset import EmbeddingsDataset
 from AbstractBert import AbstractBert
 
-def load_data(config, metadata: bool, proportion: float=0.7, max_len: int=256, partition: dict=None, labels: dict=None):
+def load_data(config, vocab, proportion: float=0.7, max_len: int=256, partition: dict=None, labels: dict=None):
     """Load data using PyTorch DataLoader.
     Keyword Arguments:
         config {string} -- config file containing data paths and tokenizer information
@@ -43,18 +44,18 @@ def load_data(config, metadata: bool, proportion: float=0.7, max_len: int=256, p
         torch.utils.data.Dataset -- dataset
     """
 
-    # columns: [0] unique ID, [1] text, [2] metadata, [3] label
+    # columns if meta: [0] unique ID, [1] text, [2] metadata, [3] label
+    # columns if no meta: [0] unique ID, [1] text, [2] label
 
     dataset = pd.read_csv(config['train_file'], header=None, sep='\t')
     # below fix null values wrecking encode_plus
 
     # convert labels to integer and drop nas
-    dataset.iloc[:, 3] = pd.to_numeric(dataset.iloc[:, 3], errors = 'coerce' )
-    dataset = dataset[~ dataset[2].isnull()]
-    # print(dataset)
+    dataset.iloc[:, 2] = pd.to_numeric(dataset.iloc[:, 2], errors = 'coerce' )
+    dataset = dataset[~ dataset[1].isnull()]
 
     # recreate the first column with the reset index.
-    dataset = dataset[(dataset.iloc[:, 3] == 1) | (dataset.iloc[:, 3] == 0)] \
+    dataset = dataset[(dataset.iloc[:, 2] == 1) | (dataset.iloc[:, 2] == 0)] \
         .reset_index().reset_index().drop(columns = ['index', 0]).rename(columns = {'level_0': 0})
     # dataset = dataset[~ dataset[2].isnull()]
 
@@ -67,11 +68,11 @@ def load_data(config, metadata: bool, proportion: float=0.7, max_len: int=256, p
         labels = {}
         # metadata = {}
     
-        partition = {'train': ids[ :int(total_len * 0.7)][:5],
-                     'valid': ids[int(total_len * 0.7): ][:5]
+        partition = {'train': ids[ :int(total_len * 0.7)],
+                     'valid': ids[int(total_len * 0.7): ]
                      }
         for i in dataset.iloc[:,0]:
-            labels[i] = dataset.iloc[i][3]
+            labels[i] = dataset.iloc[i][2]
 
     # set parameters for DataLoader -- num_workers = cores
     params = {'batch_size': 32,
@@ -121,22 +122,22 @@ def __glove_embed__(sequence, model):
     return embedded
 
 
-def load_embeddings(config, training_generator, validation_generator):
+def load_embeddings(config, name, vocab, training_generator, validation_generator):
     """Load embeddings either from cache or from scratch
     Args:
         config (json): file configurations.
     """    
     
-    if os.listdir(config['cache_folder']):
-        with open(config['cache_folder']+'_'+config['task']+'_training_embeddings.p', 'rb') as cache:
+    if len(os.listdir(config['cache'])) > 2:
+        with open(config['cache']+name+'_training_embeddings.p', 'rb') as cache:
             train_embeddings = pickle.load(cache)
 
-        with open(config['cache_folder']+'_'+config['task']+'_validation_embeddings.p', 'rb') as cache:
+        with open(config['cache']+name+'_validation_embeddings.p', 'rb') as cache:
             valid_embeddings = pickle.load(cache)
     else:
         # get embeddings from scratch
-        tokenizer = BertTokenizer.from_pretrained(config['bert_pretrained_weights'])
-        embedding_model = AbstractBert(config['bert_pretrained_weights']) 
+        tokenizer = AutoTokenizer.from_pretrained(vocab)
+        embedding_model = AbstractBert(vocab) 
 
         if torch.cuda.device_count() > 1:
             print("GPUs Available: ", torch.cuda.device_count())
@@ -148,22 +149,21 @@ def load_embeddings(config, training_generator, validation_generator):
         embedding_model.eval().to(device)
 
         logger.info(' Getting BERT embeddings...')
-        train_embeddings = get_bert_embeddings(training_generator, embedding_model)
-        valid_embeddings = get_bert_embeddings(validation_generator, embedding_model)
+        train_embeddings = _get_bert_embeddings(training_generator, embedding_model)
+        valid_embeddings = _get_bert_embeddings(validation_generator, embedding_model)
 
         # save embeddings
-        pickle.dump(train_embeddings, open(config['cache_folder']+'_'+config['task']+'_training_embeddings.p', 'wb'))
-        pickle.dump(valid_embeddings, open(config['cache_folder']+'_'+config['task']+'_validation_embeddings.p', 'wb'))
+        pickle.dump(train_embeddings, open(config['cache']+name+'_training_embeddings.p', 'wb'))
+        pickle.dump(valid_embeddings, open(config['cache']+name+'_validation_embeddings.p', 'wb'))
 
         logger.info(' Saved full BERT embeddings.')
-        save_embeddings(train_embeddings, config['out_dir'], name, "full_train_embeddings", config['metadata'])
-        save_embeddings(train_embeddings, config['out_dir'], name, "full_valid_embeddings", config['metadata'])
-        
 
-    return train_embeddings, valid_embeddings
+    embedding_shape = train_embeddings['embeddings'][1].shape[0]
+    print(embedding_shape)
+    return embedding_shape, train_embeddings, valid_embeddings
 
 
-def get_bert_embeddings(data_generator, embedding_model: torch.nn.Module):
+def _get_bert_embeddings(data_generator, embedding_model: torch.nn.Module):
     """Get BERT embeddings from a dataloader generator.
     Arguments:
         data_generator {data.Dataset} -- dataloader generator (AbstractDataset).
@@ -185,17 +185,17 @@ def get_bert_embeddings(data_generator, embedding_model: torch.nn.Module):
             local_data, local_meta, local_labels =  local_data.to(device).long().squeeze(1), \
                                                     local_meta, \
                                                     local_labels.to(device).long()
-            print(local_data.shape, local_labels.shape, local_labels)
+            # print(local_data.shape, local_labels.shape, local_labels)
             augmented_embeddings = embedding_model(local_data)#, local_meta)
 
             embeddings['ids'].extend(local_ids)
             embeddings['embeddings'].extend(np.array(augmented_embeddings.detach().cpu()))
             embeddings['labels'].extend(np.array(local_labels.detach().cpu().tolist()))
             # print('\n\n\n', embeddings['labels'])
+
     return embeddings
 
-
-def get_pca_embeddings(training_embedding: dict, validation_embedding: dict):
+def get_pca_embeddings(config, name, training_embedding: dict, validation_embedding: dict):
     """Reduced embeddings using PCA. 
     Args:
         training_embedding (dict): dictionary containing training embeddings
@@ -209,30 +209,62 @@ def get_pca_embeddings(training_embedding: dict, validation_embedding: dict):
               'num_workers': 0
               }
 
-    logger.info(' Standardizing ')
+    if os.listdir(config['pca_cache']):
+        logger.info(" Loading PCA-embeddings from cache ")
+        with open(config['pca_cache']+name+'_pca_train_embeddings.p', 'rb') as cache:
+            reduced_train_generator = pickle.load(cache)
+
+        with open(config['pca_cache']+name+'_pca_train_embeddings.p', 'rb') as cache:
+            reduced_valid_generator = pickle.load(cache)
+    else:
+        logger.info(' Standardizing ')
+        
+        ss = StandardScaler()
+        train_embed_ss = ss.fit_transform(training_embedding['embeddings'])
+        valid_embed_ss = ss.transform(validation_embedding['embeddings'])
+
+        # Dimension reduction: PCA or UMAP (?)
+        logger.info(' Doing PCA...')
+        pca_model = decomposition.PCA(n_components = 0.99) # this can be a parameter down the road, but for debugging it's fine
+        train_reduc = pca_model.fit_transform(train_embed_ss)
+        val_reduc = pca_model.transform(valid_embed_ss)
+
+        # create generator using custom Dataloader
+        reduced_train_set = EmbeddingsDataset(train_reduc,  training_embedding['ids'], training_embedding['labels'])
+        reduced_train_generator = DataLoader(reduced_train_set, **params)
+
+        reduced_valid_set = EmbeddingsDataset(val_reduc, validation_embedding['ids'], validation_embedding['labels'])
+        reduced_valid_generator = DataLoader(reduced_valid_set, **params)
+
+        train_embeddings = {'ids': [],
+                            'embeddings': [],
+                            'labels': []
+                            }
+
+        valid_embeddings = {'ids': [],
+                            'embeddings': [],
+                            'labels': []
+                            }
+        
+        for local_data, local_ids, local_labels in reduced_train_generator:
+            train_embeddings['ids'].extend(local_ids)
+            train_embeddings['embeddings'].extend(local_data)
+            train_embeddings['labels'].extend(local_labels)
+
+
+        for local_data, local_ids, local_labels in reduced_valud_generator:
+            valid_embeddings['ids'].extend(local_ids)
+            valid_embeddings['embeddings'].extend(local_data)
+            valid_embeddings['labels'].extend(local_labels)
+
+        logger.info(' Saved pca-reduced embeddings.')
+        pickle.dump(train_reduc, open(config['pca_cache']+name+'_pca_train_embeddings.p', 'wb'))
+        pickle.dump(val_reduc, open(config['pca_cache']+name+'_pca_valid_embeddings.p', 'wb'))
     
-    ss = StandardScaler()
-    train_embed_ss = ss.fit_transform(training_embedding['embeddings'])
-    valid_embed_ss = ss.transform(validation_embedding['embeddings'])
+    embedding_shape = reduced_train_generator['embeddings'][1].shape[0]
 
-    # Dimension reduction: PCA or UMAP (?)
-    logger.info(' Doing PCA...')
-    pca_model = decomposition.PCA(n_components = 0.99) # this can be a parameter down the road, but for debugging it's fine
-    train_reduc = pca_model.fit_transform(train_embed_ss)
-    val_reduc = pca_model.transform(valid_embed_ss)
+    return embedding_shape, train_embeddings, valid_embeddings
 
-    # create generator using custom Dataloader
-    reduced_train_set = EmbeddingsDataset(train_reduc, training_embedding['labels'])
-    reduced_train_generator = DataLoader(reduced_train_set, **params)
-
-    reduced_valid_set = EmbeddingsDataset(val_reduc, validation_embedding['labels'])
-    reduced_valid_generator = DataLoader(reduced_valid_set, **params)
-
-    logger.info(' Saved pca-reduced embeddings.')
-    save_embeddings(reduced_train_generator, config['out_dir'], name, "pca_train_embeddings", config['metadata'])
-    save_embeddings(reduced_valid_generator, config['out_dir'], name, "pca_valid_embeddings", config['metadata'])
-
-    return embedding_shape, reduced_train_generator, reduced_valid_generator
 
 
 def metrics(metric_type: str, preds: list, labels: list):
@@ -265,6 +297,6 @@ def metrics(metric_type: str, preds: list, labels: list):
     elif metric_type == 'ap':
         return average_precision_score(labels, preds)
 
-TODO: write save function 
+# TODO: write save function 
     with open(os.path.join(), 'wb') as handle:
         pickle.dump(augmented_valid, handle, protocol = pickle.HIGHEST_PROTOCOL)

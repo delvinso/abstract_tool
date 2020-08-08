@@ -43,7 +43,7 @@ class AbstractClassifier(nn.Module):
             out = self.drop_out(out)
             out = self.fc1(out)
             out = self.fc2(out)
-        return out
+            return out
         elif self.type == "fcn": 
             out = self.linear(x)
             return out
