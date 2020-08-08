@@ -12,6 +12,11 @@
         "out_dir": "/Users/chantal/Desktop/systematic_review/abstract_tool/_model/refactor/results/",
         "bert_model": "roberta",
         "do_pca": true,
-        "model_type": "lasso"
+        "model_type": "lasso",
+        "embedding_type": "bert",
+        "embedding_path": ""
  }
 
+
+
+ 

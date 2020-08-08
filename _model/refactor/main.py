@@ -56,26 +56,35 @@ def main(args):
     logging.basicConfig(level=logging.INFO, filename = log_out)
     logger = logging.getLogger(__name__)
 
-    # load data 
+    # load bert-related stuff
     bert_models = {'bert':'allenai/scibert_scivocab_uncased',
                    'roberta' : 'allenai/biomed_roberta_base'}
     vocab = bert_models[config['bert_model']]
 
+    # load data
     partition, training_generator, validation_generator = load_data(config, vocab)
 
-    # get the embeddings (either from scratch, or from cache)
-    logger.info(' Getting BERT embeddings...')
-    embed_shape, train_embeddings, valid_embeddings = load_embeddings(config, args.name, vocab, training_generator, validation_generator)
-   
+    # get the embeddings: either from scratch, or from cache
+    logger.info(f" Getting {config['embedding_type']} embeddings ...")
+    
+    if config['embedding_type'] == 'bert':
+        embed_shape, train_embeddings, valid_embeddings = load_embeddings(config, args.name, vocab, training_generator, validation_generator)
+    elif config['embedding_type'] == 'specter':
+        # load from filepath
+        embed_shape, train_embeddings, valid_embeddings = pickle.load(os.path(config["embedding_path"]))
+    else:
+        raise logger.error("Only BERT and Specter embeddings accepted.")
+
     # dimension reduction: PCA (either from scratch, or from cache)
     if config["do_pca"]:
         logger.info(' Reducing embedding dimensions...')
         embed_shape, train_embeddings, valid_embeddings = get_pca_embeddings(config, args.name, train_embeddings, valid_embeddings)
 
-    logger.info(' Dataset is {} and PCA was performed: {}'.format(args.name, config["do_pca"]))
+    logger.info(' Dataset is: {} and PCA was performed: {}'.format(args.name, config["do_pca"]))
     logger.info(f'\n Num. training samples: {len(training_generator)} \
                   \n Num. validation samples: {len(validation_generator)}')
 
+    # train or test
     if config['train']:
         _train(config, args.name, logger, train_embeddings, valid_embeddings, embed_shape)
     elif config['test']:
@@ -88,11 +97,11 @@ def main(args):
 def _train(config, name, logger, train, valid, shape):
     """ Train classifier """
     
-    # get the classifier
+    # get the classifier type
     model_type = config['model_type']
     logger.info(f' Classifier type: {model_type}')
 
-    # classifiers
+    # general classifiers TODO: add SVM? 
     probabilistic_classifiers = {'knn' : (KNeighborsClassifier(n_jobs=128),
                                          {'n_neighbors': [3, 5, 7, 11, 13, 15], 'weights': ['distance']}),
 
@@ -109,17 +118,18 @@ def _train(config, name, logger, train, valid, shape):
                                          'max_features': ["sqrt", 0.05, 0.1],
                                          'min_samples_split': [2, 4, 8]})}
 
-    # neural network based classifiers
-    dnn_classifiers = {'cnn' : AbstractClassifier('cnn', embedding_size=shape),
-                       'fcn' : AbstractClassifier('fcn', embedding_size=shape)}
+    # neural-network based classifiers
+    nn_classifiers = {'cnn' : AbstractClassifier('cnn', embedding_size=shape),
+                      'fcn' : AbstractClassifier('fcn', embedding_size=shape)}
 
     # training procedure based on classifier type
     if model_type in probabilistic_classifiers:
+
         classifier, param_grid = probabilistic_classifiers[model_type]
         logger.info(classifier)
         logger.info(param_grid)
 
-         # grid search arguments
+        # grid search arguments
         grids = GridSearchCV(classifier, \
                             param_grid, \
                             cv=10, \
@@ -200,7 +210,8 @@ def _train(config, name, logger, train, valid, shape):
 
         run_res.to_csv(os.path.join(config['out_dir'], '{}_results.csv'.format(name)))
 
-    elif config['model_type'] in dnn_classifiers: # if DNN, no need to do CV
+    elif config['model_type'] in dnn_classifiers:
+
         classifier = dnn_classifiers[model_type]
         criterion = CrossEntropyLoss()
 
@@ -212,17 +223,16 @@ def _train(config, name, logger, train, valid, shape):
         for epoch in range(config['epochs']):
 
             losses = 0.0
-            i = 0
-            for local_data, local_labels in train:
+
+            for i, local_data, local_labels in enumerate(train):
                 local_data, local_labels = local_data.to(device).float().squeeze(1), \
                                                         local_labels.to(device).float()
-                print(local_labels)
+                # 0-grad otherwise it sums up 
                 optimizer.zero_grad()
                 outputs = classifier(local_data)
                 loss = criterion(outputs, local_labels)
                 loss.backward()
                 optimizer.step()
-                i += 1 
 
                 losses += loss.item()
 
@@ -240,7 +250,7 @@ def _train(config, name, logger, train, valid, shape):
         with torch.no_grad():
             for data in valid:
                 embeddings, labels = data
-                outputs = net(embeddings)
+                outputs = classifier(embeddings)
                 _, predicted = torch.max(outputs.data, 1)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
@@ -253,7 +263,7 @@ def _train(config, name, logger, train, valid, shape):
 
             run_res = pd.DataFrame([roc_auc, ap])
             run_res['metrics'] = ['auroc', 'auprc']
-            run_res['set'] = ['validation', 'validation', 'training_fitted', 'training_fitted', 'training', 'training']
+            run_res['set'] = ['validation', 'training']
             run_res['data'] = name
             run_res['PCA'] = config["do_pca"]
             run_res['model_type'] = config["model_type"]
