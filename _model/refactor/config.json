@@ -1,8 +1,8 @@
 {
-        "train_file" : "/Users/chantal/Desktop/systematic_review/abstract_tool/_model/cleaned_data/ADIPP_data.tsv",
+        "train_file" : "/Users/chantal/Desktop/systematic_review/abstract_tool/_model/cleaned_data/Rehab_data.tsv",
         "metadata": false,
         "test_file": "",
-        "epochs" : 5, 
+        "epochs" : 300, 
         "max_len" : 256,
         "seed" : 2020,
         "train": true,
@@ -12,9 +12,10 @@
         "out_dir": "/Users/chantal/Desktop/systematic_review/abstract_tool/_model/refactor/results/",
         "bert_model": "roberta",
         "do_pca": true,
-        "model_type": "lasso",
+        "model_type": "cnn",
         "embedding_type": "bert",
-        "embedding_path": ""
+        "embedding_path": "",
+        "trained_classifier": ""
  }
 
 

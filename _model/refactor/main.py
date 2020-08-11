@@ -9,6 +9,8 @@ import time
 
 # 3rd party libraries
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
+from torch.nn import CrossEntropyLoss
+import torch.optim as optim
 from sklearn.model_selection import GridSearchCV
 from sklearn import  decomposition
 from sklearn.linear_model import LogisticRegression
@@ -31,9 +33,12 @@ rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (2048*2, rlimit[1]))
 
 '''
-TODO: Add function to do UMAP/embedding visualization  
-TODO: Add 1D CNN 
 TODO: Add augmented PCA
+TODO: 1D CNN arch. -- optimize hyperparamsk, test full model
+TODO: clean up train function
+TODO: add option to load pretrained classifier
+TODO: FCN
+TODO: Look into factory class pattern for abstract classifier (???)
 '''
 
 def main(args):
@@ -48,7 +53,8 @@ def main(args):
 
     # create output directories
     if not os.path.exists(config['out_dir']): os.makedirs(config['out_dir'])
-    if not os.path.exists(config['cache']): os.makedirs(config['cache'])
+    # make a cache specific for the experiment name
+    if not os.path.exists(config['cache']+"/"+args.name): os.makedirs(config['cache']+"/"+args.name)
     if not os.path.exists(config['pca_cache']): os.makedirs(config['pca_cache'])
 
     # logging.basicConfig(filename='example.log', filemode='w', level=logging.DEBUG) # if you want to pipe the logging to a file
@@ -119,8 +125,8 @@ def _train(config, name, logger, train, valid, shape):
                                          'min_samples_split': [2, 4, 8]})}
 
     # neural-network based classifiers
-    nn_classifiers = {'cnn' : AbstractClassifier('cnn', embedding_size=shape),
-                      'fcn' : AbstractClassifier('fcn', embedding_size=shape)}
+    nn_classifiers = {'cnn' : AbstractClassifier('cnn', embedding_size=shape)}
+                      # 'fcn' : AbstractClassifier('fcn', embedding_size=shape)}
 
     # training procedure based on classifier type
     if model_type in probabilistic_classifiers:
@@ -154,7 +160,7 @@ def _train(config, name, logger, train, valid, shape):
         # get predictions (posterior probability)
         all_predictions = [grids.predict_proba(valid['embeddings']), grids.predict(valid['embeddings']),  valid['labels']]
         train_fitted = [grids.predict_proba(train['embeddings']), grids.predict(train['embeddings']), train['labels']]
-        
+
         train_df = pd.DataFrame({
             'model_probs': train_fitted[0][:, 1],
             'ground_truth': train['labels'],
@@ -179,7 +185,7 @@ def _train(config, name, logger, train, valid, shape):
         
         combined_df = pd.concat([train_df, val_df], axis = 0)
 
-        combined_df.to_csv(os.path.join(OUT_DIR, '{}_preds.csv'.format(TYPE)))
+        combined_df.to_csv(os.path.join(config["out_dir"], '{}_preds.csv'.format(name)))
             
         # check prediction performance on the validation data
         logger.info(' Getting metrics...')
@@ -203,30 +209,39 @@ def _train(config, name, logger, train, valid, shape):
         run_res['model_type'] = config["model_type"]
         run_res['bert_model'] =  config["bert_model"]
         run_res['cv_time'] = cv_time
-        run_res['X_shape'] = train_reduc.shape[1] if PCA == 'use_pca' else train_embed_ss.shape[1]
+        run_res['X_shape'] = train['embeddings'].shape[1]
         run_res['params'] = str(param_grid) # the parameter grid input
         run_res['best_params'] = str(cv_best_res[['params']].iloc[0, 0])# the params for the best CV model
         run_res['grids'] = str(grids) # sanity check that all parameters were actually passed into gridsearchcv
 
         run_res.to_csv(os.path.join(config['out_dir'], '{}_results.csv'.format(name)))
 
-    elif config['model_type'] in dnn_classifiers:
+    elif config['model_type'] in nn_classifiers:
 
-        classifier = dnn_classifiers[model_type]
+        train_dataset = torch.utils.data.TensorDataset(torch.tensor(train['embeddings']), torch.tensor(train['labels']))
+        valid_dataset = torch.utils.data.TensorDataset(torch.tensor(valid['embeddings']), torch.tensor(valid['labels']))
+
+        # create torch dataloader 
+        train_loader = torch.utils.data.DataLoader(train_dataset, shuffle=False, batch_size=32)
+        valid_loader = torch.utils.data.DataLoader(valid_dataset, shuffle=False, batch_size=32)
+
+        classifier = nn_classifiers[model_type]
         criterion = CrossEntropyLoss()
 
         logger.info(classifier)
-        logger.info(classifier.params())
 
-        optimizer = torch.optim.SGD(classifier.parameters(), lr=0.001, momentum=0.9)
+        optimizer = optim.SGD(classifier.parameters(), lr=0.01, momentum=0.9)
 
         for epoch in range(config['epochs']):
 
             losses = 0.0
 
-            for i, local_data, local_labels in enumerate(train):
-                local_data, local_labels = local_data.to(device).float().squeeze(1), \
-                                                        local_labels.to(device).float()
+            for i, (data, labels)  in enumerate(train_loader):
+
+                local_data, local_labels = data.to(device).float().unsqueeze(1), \
+                                           labels.to(device).type(torch.LongTensor)
+
+
                 # 0-grad otherwise it sums up 
                 optimizer.zero_grad()
                 outputs = classifier(local_data)
@@ -236,8 +251,8 @@ def _train(config, name, logger, train, valid, shape):
 
                 losses += loss.item()
 
-                if i % 2000 == 1999: 
-                    print('[%d, %5d] loss: %.3f' % (epoch + 1, i + 1, running_loss / 2000))
+            if epoch % 25 == 0: 
+                print(f'Epoch {epoch} loss: {loss}')
 
         logger.info("Classifier Training Complete")
                 
@@ -247,19 +262,22 @@ def _train(config, name, logger, train, valid, shape):
         # check prediction performance on the validation data 
         correct = 0
         total = 0
+
         with torch.no_grad():
-            for data in valid:
-                embeddings, labels = data
-                outputs = classifier(embeddings)
+            for i, (data, labels)  in enumerate(valid_loader):
+                data, labels = data.to(device).float().unsqueeze(1), \
+                               labels.to(device).type(torch.LongTensor)
+                outputs = classifier(data)
                 _, predicted = torch.max(outputs.data, 1)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
 
             logger.info(' Getting metrics...')
-            roc_auc = metrics('roc_auc', preds = all_predictions[1], labels = all_predictions[2])
-            ap = metrics('ap', preds = all_predictions[1], labels = all_predictions[2])
+            roc_auc = metrics('roc_auc', preds = predicted, labels = labels)
+            ap = metrics('ap', preds = predicted, labels = labels)
             
             logger.info(f'AUROC: {np.mean(roc_auc)} \nAP: {np.mean(ap)}')
+            print(f'AUROC: {np.mean(roc_auc)} \nAP: {np.mean(ap)}')
 
             run_res = pd.DataFrame([roc_auc, ap])
             run_res['metrics'] = ['auroc', 'auprc']
@@ -269,7 +287,7 @@ def _train(config, name, logger, train, valid, shape):
             run_res['model_type'] = config["model_type"]
             run_res['bert_model'] =  config["bert_model"]
             run_res['cv_time'] = None
-            run_res['X_shape'] = train.shape[1] 
+            run_res['X_shape'] = train['embeddings'].shape[1]
             run_res['params'] = None
             run_res['best_params'] = None
             run_res['grids'] = None

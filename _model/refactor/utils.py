@@ -69,7 +69,7 @@ def load_data(config, vocab, proportion: float=0.7, max_len: int=256, partition:
 
     # create list of train/valid IDs if not provided
     if not partition and not labels:
-        ids = list(dataset.iloc[:,unique_id_col])[:500]
+        ids = list(dataset.iloc[:,unique_id_col])
         total_len = len(ids)
         np.random.shuffle(ids)
 
@@ -141,8 +141,7 @@ def load_embeddings(config, name, vocab, training_generator, validation_generato
     Returns:
         embedding_shape, train_embeddings, valid_embeddings
     """    
-    
-    if len(os.listdir(config['cache'])) > 2:
+    if os.listdir(config['cache']+"/"+name):
         with open(config['cache']+name+'_training_embeddings.p', 'rb') as cache:
             train_embeddings = pickle.load(cache)
 
@@ -203,7 +202,7 @@ def _get_bert_embeddings(data_generator, embedding_model: torch.nn.Module, metad
 
                 augmented_embeddings = embedding_model(local_data, local_meta)
 
-                embeddings['ids'].extend(local_ids)
+                embeddings['ids'] = local_ids
                 embeddings['embeddings'].extend(np.array(augmented_embeddings.detach().cpu()))
                 embeddings['labels'].extend(np.array(local_labels.detach().cpu().tolist()))
         else:
@@ -212,10 +211,11 @@ def _get_bert_embeddings(data_generator, embedding_model: torch.nn.Module, metad
                                                 local_labels.to(device).long()
 
                 augmented_embeddings = embedding_model(local_data)
-                embeddings['ids'].extend(local_ids)
+
+                embeddings['ids'] = local_ids
                 embeddings['embeddings'].extend(np.array(augmented_embeddings.detach().cpu()))
                 embeddings['labels'].extend(np.array(local_labels.detach().cpu().tolist()))
-
+    
     return embeddings
 
 def get_pca_embeddings(config, name, training_embedding: dict, validation_embedding: dict):
@@ -237,7 +237,7 @@ def get_pca_embeddings(config, name, training_embedding: dict, validation_embedd
         with open(config['pca_cache']+name+'_pca_train_embeddings.p', 'rb') as cache:
             train_embeddings = pickle.load(cache)
 
-        with open(config['pca_cache']+name+'_pca_train_embeddings.p', 'rb') as cache:
+        with open(config['pca_cache']+name+'_pca_valid_embeddings.p', 'rb') as cache:
             valid_embeddings = pickle.load(cache)
     else:
         logger.info(' Standardizing ')
@@ -258,6 +258,10 @@ def get_pca_embeddings(config, name, training_embedding: dict, validation_embedd
 
         train_embeddings = training_embedding.copy()
         valid_embeddings = validation_embedding.copy()
+
+        # save embeddings
+        pickle.dump(train_embeddings, open(config['cache']+name+"/"+name+'_pca_train_embeddings.p', 'wb'))
+        pickle.dump(valid_embeddings, open(config['cache']+name+"/"+name+'_pca_valid_embeddings.p', 'wb'))
 
     embedding_shape = len(train_embeddings['embeddings'][0])
 

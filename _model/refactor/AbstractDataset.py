@@ -28,7 +28,7 @@ class AbstractDataset(data.Dataset):
   def __getitem__(self, index):
       # Select sample
       ID = self.list_IDs[index]
-      
+
       # Load data
       X = self.data[self.data[0] == ID][1].values
 
