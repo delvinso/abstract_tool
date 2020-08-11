@@ -140,7 +140,8 @@ def load_embeddings(config, name, vocab, training_generator, validation_generato
         validation_generator -- 
     Returns:
         embedding_shape, train_embeddings, valid_embeddings
-    """    
+    """   
+
     if os.listdir(config['cache']+"/"+name):
         with open(config['cache']+name+'_training_embeddings.p', 'rb') as cache:
             train_embeddings = pickle.load(cache)
@@ -217,6 +218,7 @@ def _get_bert_embeddings(data_generator, embedding_model: torch.nn.Module, metad
                 embeddings['labels'].extend(np.array(local_labels.detach().cpu().tolist()))
     
     return embeddings
+
 
 def get_pca_embeddings(config, name, training_embedding: dict, validation_embedding: dict):
     """Reduced embeddings using PCA. 
