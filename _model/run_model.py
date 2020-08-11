@@ -26,7 +26,6 @@ from AbstractDataset import AbstractDataset
 from AbstractClassifier import AbstractClassifier
 from AbstractBert import AbstractBert
 from utils import load_data, metrics, load_embeddings, get_pca_embeddings
-from run_model import train
 
 # for dealing with multiprocessing/len(ancdata) error
 import resource
@@ -35,7 +34,9 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (2048*2, rlimit[1]))
 
 def train(config, name, logger, train, valid, shape):
     """ Train classifier """
-    
+    use_cuda = torch.cuda.is_available()
+    device = torch.device("cuda:0" if use_cuda else "cpu")
+
     # get the classifier type
     model_type = config['model_type']
     logger.info(f' Classifier type: {model_type}')
@@ -228,5 +229,5 @@ def train(config, name, logger, train, valid, shape):
             run_res.to_csv(os.path.join(config['out_dir'], '{}_results.csv'.format(name)))
     else:
         raise ValueError('Model not implemented yet')
-    
+
     return

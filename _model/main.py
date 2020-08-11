@@ -57,7 +57,7 @@ def main(args):
 
     # set up cache/output directories and logger
     _set_dirs(config, args.name)
-    logger = _set_logger(config)
+    logger = _set_logger(config, args.name)
 
     # get embeddings 
     embed_shape, train_embeddings, valid_embeddings = _get_data(config, logger, args.name)
@@ -71,10 +71,10 @@ def main(args):
         raise logger.error(f"Neither train nor test mode activated.")
 
 
-def _set_logger(config):
+def _set_logger(config, name):
     """ set up logging files """
 
-    log_out = os.path.join(config['out_dir'], 'model.log')
+    log_out = os.path.join(config['out_dir'], name+'_model.log')
     logging.basicConfig(level=logging.INFO, filename = log_out)
     logger = logging.getLogger(__name__)
 
