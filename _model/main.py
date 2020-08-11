@@ -112,7 +112,7 @@ def _get_data(config, logger, name):
         embed_shape, train_embeddings, valid_embeddings = load_embeddings(config, name, vocab, training_generator, validation_generator)
     elif config['embedding_type'] == 'specter':
         # load from filepath
-        embed_shape, train_embeddings, valid_embeddings = pickle.load(os.path(config["embedding_path"]))
+        embed_shape, train_embeddings, valid_embeddings = pickle.load(os.path(config["precomputed_embedding_path"]))
     else:
         raise logger.error("Only BERT and Specter embeddings accepted.")
 

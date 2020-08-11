@@ -14,6 +14,6 @@
         "do_pca": true,
         "model_type": "cnn",
         "embedding_type": "bert",
-        "embedding_path": "",
+        "precomputed_embedding_path": "",
         "trained_classifier": ""
  }
