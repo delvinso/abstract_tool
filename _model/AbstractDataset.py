@@ -5,9 +5,10 @@ from torch.utils import data
 from keras.preprocessing.sequence import pad_sequences
 
 class AbstractDataset(data.Dataset):
-  def __init__(self, data, labels, list_IDs: list=None,  max_len: int=128):
+
+  def __init__(self, data, list_IDs: list, labels: dict, metadata: False, max_len: int=128):
     """Create custom torch Dataset.
-    
+  
     Arguments:
     data {array-like} --  DataFrame containing dataset.
     list_IDs {list} -- List of data IDs to be loaded.
@@ -20,21 +21,25 @@ class AbstractDataset(data.Dataset):
     self.max_len = max_len
     self.labels = labels
     self.list_IDs = list_IDs
+    self.metadata = metadata
 
   def __len__(self):
     return len(self.list_IDs)
 
   def __getitem__(self, index):
+    # select sample
     ID = self.list_IDs[index] 
-    # Load data and get metadata
+    
+    # Load data 
     X = self.data[self.data[0] == ID][1].values
-    Y = self.data[self.data[0] == ID][2].values.tolist()
 
-    # X = pad_sequences(X, maxlen=self.max_len, dtype="long", truncating="post", padding="post")
+    if self.metadata:
+      Y = self.data[self.data[0] == ID][2].values.tolist()
+      z = self.labels[ID]
 
-    # Load label
-    # z = np.reshape(self.labels[ID], (1,1))
-    z = self.labels[ID]
+      return self.list_IDs, torch.tensor(X[0]['input_ids']), Y, torch.tensor(z) 
 
-    # X: data, Y: metadata, z: label
-    return self.list_IDs, torch.tensor(X[0]['input_ids']), Y, torch.tensor(z) 
+    else: 
+      y = self.labels[ID]
+
+      return self.list_IDs, torch.tensor(X[0]['input_ids']), torch.tensor(y) 

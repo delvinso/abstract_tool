@@ -9,7 +9,6 @@ class AbstractBert(nn.Module):
   
     def __init__(self, vocab: str='bert-base-uncased', num_labels: int=2):
         """ BERT model with customizable layers for classification. 
-
         Keyword Arguments:
             pretrained_weights {str} -- pretrained weights to load BERT with (default: {'bert-base-uncased'})
             num_labels {int} -- number of labels for the data (default: {2})
@@ -33,17 +32,14 @@ class AbstractBert(nn.Module):
 
     def forward(self, input_ids, augment_ids = None, token_type_ids=None, attention_mask=None, labels=None, augmented=None):
         """ Forward method of the BERT model. 
-
         Arguments:
             input_ids {torch.tensor} -- unique identifier of the input.
             augment_ids {torch.tensor} -- unique identifier of the augmented input.
-
         Keyword Arguments:
             token_type_ids {torch.tensor} -- sentence type. (default: {None})
             attention_mask {torch.tensor} -- mask for padding. (default: {None})
             labels {torch.tensor} --  labels for the data. (default: {None})
             augmented {torch.tensor} -- metadata embeddings to augment the pooled output (default: {None})
-
         Returns:
             torch.tensor -- pooled output token or logits
         """  
@@ -76,6 +72,3 @@ class AbstractBert(nn.Module):
         # else: 
 
         return pooled_output
-
-
-        

@@ -1,16 +1,19 @@
- {
-       "task": "ADDIP", 
-       "train_file" : "/home/d/dbassani/chantals/abstract_tool/_initial_work/cleaned_data_date/ADIPP_data.tsv",
+{
+        "train_file" : "/Users/chantal/Desktop/systematic_review/abstract_tool/_model/cleaned_data/Rehab_data.tsv",
+        "metadata": false,
         "test_file": "",
-        "pretrained_embeddings": "",
-        "pretrained_bert": "",
-        "pretrained_classifier": "",
-        "epochs": 5,
-        "metadata": true, 
-        "train_classifier": true,
-        "finetune_bert": false,
+        "epochs" : 300, 
         "max_len" : 256,
         "seed" : 2020,
-        "bert_pretrained_weights": "allenai/scibert_scivocab_uncased",
-        "cache_folder": "/home/d/dbassani/chantals/abstract_tool/cache/"
+        "train": true,
+        "test": false,
+        "cache": "/Users/chantal/Desktop/systematic_review/abstract_tool/_model/refactor/cache/",
+        "pca_cache": "/Users/chantal/Desktop/systematic_review/abstract_tool/_model/refactor/cache/pca_embeddings/",
+        "out_dir": "/Users/chantal/Desktop/systematic_review/abstract_tool/_model/refactor/results/",
+        "bert_model": "roberta",
+        "do_pca": true,
+        "model_type": "cnn",
+        "embedding_type": "bert",
+        "embedding_path": "",
+        "trained_classifier": ""
  }

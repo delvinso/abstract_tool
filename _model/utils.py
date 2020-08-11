@@ -12,6 +12,9 @@ from torch.utils.data import TensorDataset, DataLoader, RandomSampler, Sequentia
 from torch.utils import data
 from sklearn import decomposition
 from keras.preprocessing.sequence import pad_sequences
+
+from sklearn.preprocessing import StandardScaler
+
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import precision_recall_curve, f1_score, roc_auc_score, auc, average_precision_score, precision_score, recall_score
 from transformers import *
@@ -26,10 +29,10 @@ import torchtext
 
 # custom
 from AbstractDataset import AbstractDataset
-from EmbeddingsDataset import EmbeddingsDataset
+
 from AbstractBert import AbstractBert
 
-def load_data(config, metadata: bool, proportion: float=0.7, max_len: int=256, partition: dict=None, labels: dict=None):
+def load_data(config, vocab, proportion: float=0.7, max_len: int=256, partition: dict=None, labels: dict=None):
     """Load data using PyTorch DataLoader.
 
     Keyword Arguments:
@@ -45,35 +48,46 @@ def load_data(config, metadata: bool, proportion: float=0.7, max_len: int=256, p
         torch.utils.data.Dataset -- dataset
     """
 
-    # columns: [0] unique ID, [1] text, [2] metadata, [3] label
+    # columns if meta: [0] unique ID, [1] text, [2] metadata, [3] label
+    # columns if no meta: [0] unique ID, [1] text, [2] label
+
+    if config["metadata"]:
+        unique_id_col = 0
+        text_col = 1
+        metadata_col = 2
+        label_col = 3
+    else: 
+        unique_id_col = 0
+        text_col = 1
+        label_col = 2
 
     dataset = pd.read_csv(config['train_file'], header=None, sep='\t')
     # below fix null values wrecking encode_plus
 
     # convert labels to integer and drop nas
-    dataset.iloc[:, 3] = pd.to_numeric(dataset.iloc[:, 3], errors = 'coerce' )
-    dataset = dataset[~ dataset[2].isnull()]
-    # print(dataset)
+
+    dataset.iloc[:, label_col] = pd.to_numeric(dataset.iloc[:, label_col], errors = 'coerce' )
+    dataset = dataset[~ dataset[text_col].isnull()]
 
     # recreate the first column with the reset index.
-    dataset = dataset[(dataset.iloc[:, 3] == 1) | (dataset.iloc[:, 3] == 0)] \
+    dataset = dataset[(dataset.iloc[:, label_col] == 1) | (dataset.iloc[:, label_col] == 0)] \
         .reset_index().reset_index().drop(columns = ['index', 0]).rename(columns = {'level_0': 0})
-    # dataset = dataset[~ dataset[2].isnull()]
 
     # create list of train/valid IDs if not provided
     if not partition and not labels:
-        ids = list(dataset.iloc[:,0])
+        ids = list(dataset.iloc[:,unique_id_col])
+
         total_len = len(ids)
         np.random.shuffle(ids)
 
         labels = {}
         # metadata = {}
     
-        partition = {'train': ids[ :int(total_len * 0.7)][:5],
-                     'valid': ids[int(total_len * 0.7): ][:5]
+        partition = {'train': ids[ :int(total_len * 0.7)],
+                     'valid': ids[int(total_len * 0.7): ]
                      }
-        for i in dataset.iloc[:,0]:
-            labels[i] = dataset.iloc[i][3]
+        for i in dataset.iloc[:, unique_id_col]:
+            labels[i] = dataset.iloc[i][label_col]
 
     # set parameters for DataLoader -- num_workers = cores
     params = {'batch_size': 32,
@@ -81,27 +95,27 @@ def load_data(config, metadata: bool, proportion: float=0.7, max_len: int=256, p
               'num_workers': 0
               }
 
-    # NOTE: the tokenizer.encocde_plus function does the token/special/map/padding/attention all in one go
-    tokenizer = BertTokenizer.from_pretrained(config['bert_pretrained_weights'])
-    dataset[1] = dataset[1].apply(lambda x: tokenizer.encode_plus(str(x), \
+    tokenizer = AutoTokenizer.from_pretrained(vocab)
+    dataset[text_col] = dataset[text_col].apply(lambda x: tokenizer.encode_plus(str(x), \
                                                                   max_length=max_len, \
                                                                   add_special_tokens=True, \
                                                                   pad_to_max_length=True, \
-truncation=True))
+                                                                  truncation=True))
 
-    if metadata: # glove for metadata preprocessing 
+    if config['metadata']: # glove for metadata preprocessing 
         glove = torchtext.vocab.GloVe(name="6B", dim=50)
-        dataset[2] = dataset[2].apply(lambda y: __pad__(str(y).split(" "), 30))
-        dataset[2] = dataset[2].apply(lambda z: __glove_embed__(z, glove))
+        dataset[metadata_col] = dataset[metadata_col].apply(lambda y: __pad__(str(y).split(" "), 30))
+        dataset[metadata_col] = dataset[metadata_col].apply(lambda z: __glove_embed__(z, glove))
 
-    train_data = dataset[dataset[0].isin(partition['train'])]
-    valid_data = dataset[dataset[0].isin(partition['valid'])]
+    train_data = dataset[dataset[unique_id_col].isin(partition['train'])]
+    valid_data = dataset[dataset[unique_id_col].isin(partition['valid'])]
 
     # create train/valid generators
-    training_set = AbstractDataset(data=train_data, labels=labels, list_IDs=partition['train'])
+    training_set = AbstractDataset(data=train_data, labels=labels, metadata=config['metadata'], list_IDs=partition['train'])
     training_generator = DataLoader(training_set, **params)
 
-    validation_set = AbstractDataset(data=valid_data, labels=labels, list_IDs=partition['valid'])
+    validation_set = AbstractDataset(data=valid_data, labels=labels, metadata=config['metadata'], list_IDs=partition['valid'])
+    
     validation_generator = DataLoader(validation_set, **params)
 
     return partition, training_generator, validation_generator
@@ -124,23 +138,27 @@ def __glove_embed__(sequence, model):
     return embedded
 
 
-def load_embeddings(config, training_generator, validation_generator):
+def load_embeddings(config, name, vocab, training_generator, validation_generator):
     """Load embeddings either from cache or from scratch
-
     Args:
-        config (json): file configurations.
+        config (json) -- file configurations.
+        name --
+        vocab -- 
+        training_generator --
+        validation_generator -- 
+    Returns:
+        embedding_shape, train_embeddings, valid_embeddings
     """    
-    
-    if os.listdir(config['cache_folder']):
-        with open(config['cache_folder']+'_'+config['task']+'_training_embeddings.p', 'rb') as cache:
+    if os.listdir(config['cache']+"/"+name):
+        with open(config['cache']+name+'_training_embeddings.p', 'rb') as cache:
             train_embeddings = pickle.load(cache)
 
-        with open(config['cache_folder']+'_'+config['task']+'_validation_embeddings.p', 'rb') as cache:
+        with open(config['cache']+name+'_validation_embeddings.p', 'rb') as cache:
             valid_embeddings = pickle.load(cache)
     else:
         # get embeddings from scratch
-        tokenizer = BertTokenizer.from_pretrained(config['bert_pretrained_weights'])
-        embedding_model = AbstractBert(config['bert_pretrained_weights']) 
+        tokenizer = AutoTokenizer.from_pretrained(vocab)
+        embedding_model = AbstractBert(vocab) 
 
         if torch.cuda.device_count() > 1:
             print("GPUs Available: ", torch.cuda.device_count())
@@ -152,19 +170,23 @@ def load_embeddings(config, training_generator, validation_generator):
         embedding_model.eval().to(device)
 
         logger.info(' Getting BERT embeddings...')
-        train_embeddings = get_bert_embeddings(training_generator, embedding_model)
-        valid_embeddings = get_bert_embeddings(validation_generator, embedding_model)
+
+        train_embeddings = _get_bert_embeddings(training_generator, embedding_model, config["metadata"])
+        valid_embeddings = _get_bert_embeddings(validation_generator, embedding_model, config["metadata"])
 
         # save embeddings
-        pickle.dump(train_embeddings, open(config['cache_folder']+'_'+config['task']+'_training_embeddings.p', 'wb'))
-        pickle.dump(valid_embeddings, open(config['cache_folder']+'_'+config['task']+'_validation_embeddings.p', 'wb'))
-    
-    return train_embeddings, valid_embeddings
+        pickle.dump(train_embeddings, open(config['cache']+name+'_training_embeddings.p', 'wb'))
+        pickle.dump(valid_embeddings, open(config['cache']+name+'_validation_embeddings.p', 'wb'))
+
+        logger.info(' Saved full BERT embeddings.')
+
+    embedding_shape = train_embeddings['embeddings'][1].shape[0]
+
+    return embedding_shape, train_embeddings, valid_embeddings
 
 
-def get_bert_embeddings(data_generator, embedding_model: torch.nn.Module):
+def _get_bert_embeddings(data_generator, embedding_model: torch.nn.Module, metadata: False):
     """Get BERT embeddings from a dataloader generator.
-
     Arguments:
         data_generator {data.Dataset} -- dataloader generator (AbstractDataset).
         embedding_model {torch.nn.Module} -- embedding model. 
@@ -182,67 +204,88 @@ def get_bert_embeddings(data_generator, embedding_model: torch.nn.Module):
                      }
         
         # get BERT training embeddings
-        for local_ids, local_data, local_meta, local_labels in data_generator:
-            local_data, local_meta, local_labels =  local_data.to(device).long().squeeze(1), \
-                                                    local_meta, \
-                                                    local_labels.to(device).long()
-            print(local_data.shape, local_labels.shape, local_labels)
-            augmented_embeddings = embedding_model(local_data)#, local_meta)
+        
+        if metadata:
+            for local_ids, local_data, local_meta, local_labels in data_generator:
+                local_data, local_meta, local_labels =  local_data.to(device).long().squeeze(1), \
+                                                        local_meta, \
+                                                        local_labels.to(device).long()
 
-            embeddings['ids'].extend(local_ids)
-            embeddings['embeddings'].extend(np.array(augmented_embeddings.detach().cpu()))
-            embeddings['labels'].extend(np.array(local_labels.detach().cpu().tolist()))
-            # print('\n\n\n', embeddings['labels'])
+                augmented_embeddings = embedding_model(local_data, local_meta)
+
+                embeddings['ids'] = local_ids
+                embeddings['embeddings'].extend(np.array(augmented_embeddings.detach().cpu()))
+                embeddings['labels'].extend(np.array(local_labels.detach().cpu().tolist()))
+        else:
+            for local_ids, local_data, local_labels in data_generator:
+                local_data, local_labels =  local_data.to(device).long().squeeze(1), \
+                                                local_labels.to(device).long()
+
+                augmented_embeddings = embedding_model(local_data)
+
+                embeddings['ids'] = local_ids
+                embeddings['embeddings'].extend(np.array(augmented_embeddings.detach().cpu()))
+                embeddings['labels'].extend(np.array(local_labels.detach().cpu().tolist()))
+    
     return embeddings
 
-
-def get_pca_embeddings(training_embedding: dict, validation_embedding: dict):
+def get_pca_embeddings(config, name, training_embedding: dict, validation_embedding: dict):
     """Reduced embeddings using PCA. 
-
     Args:
-        training_embedding (dict): dictionary containing training embeddings
-        validation_embedding (dict): dictionary containing validation embeddings
-
+        training_embedding (dict) -- dictionary containing training embeddings
+        validation_embedding (dict) -- dictionary containing validation embeddings
     Returns:
-        generator: Torch Dataloader
-        tuple: shape of embedding
+        generator -- Torch Dataloader
+        tuple -- shape of embedding
     """    
     params = {'batch_size': 32,
-              'shuffle': True,
+              'shuffle': False,
               'num_workers': 0
               }
 
-    logger.info(' Doing PCA...')
+    if os.listdir(config['pca_cache']):
+        logger.info(" Loading PCA-embeddings from cache ")
+        with open(config['pca_cache']+name+'_pca_train_embeddings.p', 'rb') as cache:
+            train_embeddings = pickle.load(cache)
 
-    all_embeddings = np.vstack((training_embedding['embeddings'], validation_embedding['embeddings']))
+        with open(config['pca_cache']+name+'_pca_valid_embeddings.p', 'rb') as cache:
+            valid_embeddings = pickle.load(cache)
+    else:
+        logger.info(' Standardizing ')
+        
+        ss = StandardScaler()
+        train_embed_ss = ss.fit_transform(training_embedding['embeddings'])
+        valid_embed_ss = ss.transform(validation_embedding['embeddings'])
 
-    #pca_model = decomposition.PCA(svd_solver='full', n_components='mle')
-    pca_model = decomposition.PCA()
-    all_reduced = pca_model.fit_transform(all_embeddings)
+        # Dimension reduction: PCA or UMAP (?)
+        logger.info(' Doing PCA...')
+        pca_model = decomposition.PCA(n_components = 0.99) # this can be a parameter down the road, but for debugging it's fine
+        train_reduc = pca_model.fit_transform(train_embed_ss)
+        val_reduc = pca_model.transform(valid_embed_ss)
 
-    reduced_train = all_reduced[ :len(training_embedding['embeddings'])]
-    reduced_valid = all_reduced[len(training_embedding['embeddings']): ]
+        
+        training_embedding['embeddings'] = train_reduc
+        validation_embedding['embeddings'] = val_reduc
 
-    embedding_shape = all_reduced[0].shape
+        train_embeddings = training_embedding.copy()
+        valid_embeddings = validation_embedding.copy()
 
-    # create generator using custom Dataloader
-    reduced_train_set = EmbeddingsDataset(reduced_train, training_embedding['labels'])
-    reduced_train_generator = DataLoader(reduced_train_set, **params)
+        # save embeddings
+        pickle.dump(train_embeddings, open(config['cache']+name+"/"+name+'_pca_train_embeddings.p', 'wb'))
+        pickle.dump(valid_embeddings, open(config['cache']+name+"/"+name+'_pca_valid_embeddings.p', 'wb'))
 
-    reduced_valid_set = EmbeddingsDataset(reduced_valid, validation_embedding['labels'])
-    reduced_valid_generator = DataLoader(reduced_valid_set, **params)
+    embedding_shape = len(train_embeddings['embeddings'][0])
 
-    return embedding_shape, reduced_train_generator, reduced_valid_generator
+    return embedding_shape, train_embeddings, valid_embeddings
+
 
 
 def metrics(metric_type: str, preds: list, labels: list):
     """ Provides various metrics between predictions and labels.
-
     Arguments:
         metric_type {str} -- type of metric to use ['flat_accuracy', 'f1', 'roc_auc', 'precision', 'recall']
         preds {list} -- predictions.
         labels {list} -- labels.
-
     Returns:
         int -- prediction accuracy
     """

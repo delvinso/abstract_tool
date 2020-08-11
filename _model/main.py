@@ -4,119 +4,314 @@ import logging
 import json
 import argparse
 import pickle
-from pprint import pprint
+import os
+import time
 
 # 3rd party libraries
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
-from keras.preprocessing.sequence import pad_sequences
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn import cluster, datasets, mixture, decomposition
-from sklearn.neighbors import kneighbors_graph, KNeighborsClassifier
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import precision_recall_curve, f1_score, roc_auc_score, auc, average_precision_score, precision_score, recall_score
-from transformers import *
-from tqdm import tqdm, trange
 from torch.nn import CrossEntropyLoss
-
+import torch.optim as optim
+from sklearn.model_selection import GridSearchCV
+from sklearn import  decomposition
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+from transformers import AutoTokenizer
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use('Agg')
+
 
 # custom
 from AbstractDataset import AbstractDataset
 from AbstractClassifier import AbstractClassifier
 from AbstractBert import AbstractBert
-from utils import load_data, metrics, load_embeddings, get_bert_embeddings, get_pca_embeddings
+
+from utils import load_data, metrics, load_embeddings, get_pca_embeddings
+
+# for dealing with multiprocessing/len(ancdata) error
+import resource
+rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
+resource.setrlimit(resource.RLIMIT_NOFILE, (2048*2, rlimit[1]))
+
+'''
+TODO: Add augmented PCA
+TODO: 1D CNN arch. -- optimize hyperparamsk, test full model
+TODO: clean up train function
+TODO: add option to load pretrained classifier
+TODO: FCN
+TODO: Look into factory class pattern for abstract classifier (???)
+'''
+
+def main(args):
+  
+  # load config file 
+  with open(args.config_dir) as f:
+      config = json.load(f)
+
+  # set seeds
+  np.random.seed(config['seed'])
+  torch.manual_seed(config['seed'])
+
+  # create output directories
+  if not os.path.exists(config['out_dir']): os.makedirs(config['out_dir'])
+  # make a cache specific for the experiment name
+  if not os.path.exists(config['cache']+"/"+args.name): os.makedirs(config['cache']+"/"+args.name)
+  if not os.path.exists(config['pca_cache']): os.makedirs(config['pca_cache'])
+
+  # logging.basicConfig(filename='example.log', filemode='w', level=logging.DEBUG) # if you want to pipe the logging to a file
+  log_out = os.path.join(config['out_dir'], 'model.log')
+  logging.basicConfig(level=logging.INFO, filename = log_out)
+  logger = logging.getLogger(__name__)
+
+  # load bert-related stuff
+  bert_models = {'bert':'allenai/scibert_scivocab_uncased',
+                 'roberta' : 'allenai/biomed_roberta_base'}
+  vocab = bert_models[config['bert_model']]
+
+  # load data
+  partition, training_generator, validation_generator = load_data(config, vocab)
+
+  # get the embeddings: either from scratch, or from cache
+  logger.info(f" Getting {config['embedding_type']} embeddings ...")
+
+  if config['embedding_type'] == 'bert':
+      embed_shape, train_embeddings, valid_embeddings = load_embeddings(config, args.name, vocab, training_generator, validation_generator)
+  elif config['embedding_type'] == 'specter':
+      # load from filepath
+      embed_shape, train_embeddings, valid_embeddings = pickle.load(os.path(config["embedding_path"]))
+  else:
+      raise logger.error("Only BERT and Specter embeddings accepted.")
+
+  # dimension reduction: PCA (either from scratch, or from cache)
+  if config["do_pca"]:
+      logger.info(' Reducing embedding dimensions...')
+      embed_shape, train_embeddings, valid_embeddings = get_pca_embeddings(config, args.name, train_embeddings, valid_embeddings)
+
+  logger.info(' Dataset is: {} and PCA was performed: {}'.format(args.name, config["do_pca"]))
+  logger.info(f'\n Num. training samples: {len(training_generator)} \
+                \n Num. validation samples: {len(validation_generator)}')
+
+  # train or test
+  if config['train']:
+      _train(config, args.name, logger, train_embeddings, valid_embeddings, embed_shape)
+  elif config['test']:
+      # _test(config, args.name, logger)
+      pass
+  else:
+      raise logger.error(f"Neither train nor test mode activated.")
 
 
+def _train(config, name, logger, train, valid, shape):
+  """ Train classifier """
 
-def main():
+  # get the classifier type
+  model_type = config['model_type']
+  logger.info(f' Classifier type: {model_type}')
 
-    # logging.basicConfig(filename='example.log', filemode='w', level=logging.DEBUG) # if you want to pipe the logging to a file
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
+  # general classifiers TODO: add SVM? 
+  probabilistic_classifiers = {'knn' : (KNeighborsClassifier(n_jobs=128),
+                                       {'n_neighbors': [3, 5, 7, 11, 13, 15], 'weights': ['distance']}),
 
-    use_cuda = torch.cuda.is_available()
-    device = torch.device("cuda:0" if use_cuda else "cpu")
+                              'lasso': (LogisticRegression(n_jobs=128, penalty='l1', solver = 'saga',
+                                                              random_state=0, verbose=1, max_iter=5000, tol=0.001),
+                                       {'C': [0.001, 0.01, 0.1, 1, 10, 100] }),
 
-    # set up parser
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config_dir', help='path to the json config file')
-    args = parser.parse_args()
+                              'ridge': (LogisticRegression(n_jobs=128, penalty='l2', solver = 'saga',
+                                                              random_state=0, verbose=1, max_iter=5000, tol=0.001),
+                                       {'C': [0.001, 0.01, 0.1, 1, 10, 100]}),
 
-    # load config file 
-    with open(args.config_dir) as f:
-        config = json.load(f)
+                              'rf': (RandomForestClassifier(n_jobs=128, verbose=1, random_state=0),
+                                      {'n_estimators': [500, 750, 1000],
+                                       'max_features': ["sqrt", 0.05, 0.1],
+                                       'min_samples_split': [2, 4, 8]})}
 
-    # set seeds
-    np.random.seed(config['seed'])
-    torch.manual_seed(config['seed'])
-    # torch.cuda.manual_seed_all(SEED)
+  # neural-network based classifiers
+  nn_classifiers = {'cnn' : AbstractClassifier('cnn', embedding_size=shape)}
+                    # 'fcn' : AbstractClassifier('fcn', embedding_size=shape)}
 
-    # load data     
-    partition, training_generator, validation_generator = load_data(config, metadata=False)
+  # training procedure based on classifier type
+  if model_type in probabilistic_classifiers:
 
-    # get embeddings  
-    train_embeddings, valid_embeddings = load_embeddings(config, training_generator, validation_generator)
+      classifier, param_grid = probabilistic_classifiers[model_type]
+      logger.info(classifier)
+      logger.info(param_grid)
 
-    # do PCA (TODO: or augmented PCA)
-    embed_shape, reduced_train_generator, reduced_valid_generator = get_pca_embeddings(train_embeddings, valid_embeddings)
+      # grid search arguments
+      grids = GridSearchCV(classifier, \
+                          param_grid, \
+                          cv=10, \
+                          scoring={'average_precision', 'roc_auc'}, \
+                          refit='roc_auc')
 
-    ############################### Train Classifier ###############################
-    classifier = AbstractClassifier(embedding_size=embed_shape[0])
-    criterion = CrossEntropyLoss()
-    optimizer = torch.optim.SGD(classifier.parameters(), lr=0.001, momentum=0.9)
+      # perform the grid search
+      start_time = time.time()
+      grids.fit(train['embeddings'], train['labels'])
+      end_time = time.time()
 
-    for epoch in range(config['epochs']):
+      cv_time = end_time - start_time
+      logging.info(' CV Parameter search took {} minutes'.format(cv_time/60)) # seconds
 
-        losses = 0.0
-        i = 0
-        for local_data, local_labels in reduced_train_generator:
-            local_data, local_labels = local_data.to(device).float().squeeze(1), \
-                                                    local_labels.to(device).float()
-            print(local_labels)
-            optimizer.zero_grad()
-            outputs = classifier(local_data)
-            loss = criterion(outputs, local_labels)
-            loss.backward()
-            optimizer.step()
-            i += 1 
+      # take cv results into a dataframe and slice row with best parameters
+      cv_res = pd.DataFrame.from_dict(grids.cv_results_)
+      cv_best_res = cv_res[cv_res.rank_test_roc_auc == 1]
 
-            losses += loss.item()
+      logger.info((f"Model: {config['model_type']}\n\tBest CV Params: {cv_best_res.params}\n\tTraining:\n\tAUROC: {cv_best_res[['mean_test_roc_auc']].iloc[0]['mean_test_roc_auc']}\
+                                  \n\tAP: {cv_best_res[['mean_test_average_precision']].iloc[0]['mean_test_average_precision']}"))
 
-            if i % 2000 == 1999: 
-                print('[%d, %5d] loss: %.3f' % (epoch + 1, i + 1, running_loss / 2000))
-    ###############################################################################
+      # get predictions (posterior probability)
+      all_predictions = [grids.predict_proba(valid['embeddings']), grids.predict(valid['embeddings']),  valid['labels']]
+      train_fitted = [grids.predict_proba(train['embeddings']), grids.predict(train['embeddings']), train['labels']]
 
-    logger.info("Classifier Training Complete")
-            
-    # save model
-    torch.save(classifier.state_dict(), config["pretrained_classifier"])
+      train_df = pd.DataFrame({
+          'model_probs': train_fitted[0][:, 1],
+          'ground_truth': train['labels'],
+          'set': 'training_fitted',
+          'data': name,
+          'pca': config['do_pca'],
+          'model_type': config['model_type'],
+          'bert_model': config['bert_model'],
+          'ids': train['ids']
+      })
+
+      val_df = pd.DataFrame({
+          'model_probs': all_predictions[0][:, 1],
+          'ground_truth': valid['labels'],
+          'set': 'validation',
+          'data': name,
+          'pca': config['do_pca'],
+          'model_type': config['model_type'],
+          'bert_model': config['bert_model'],
+          'ids': valid['ids']
+      })
+
+      combined_df = pd.concat([train_df, val_df], axis = 0)
+
+      combined_df.to_csv(os.path.join(config["out_dir"], '{}_preds.csv'.format(name)))
+
+      # check prediction performance on the validation data
+      logger.info(' Getting metrics...')
+
+      # AUROC and AUPRC are calculated with P(y == 1) so we want to use index 0 (probs) instead of 1 (thresholded classes) of all_predictions
+      roc_auc = metrics('roc_auc', preds = all_predictions[0][:, 1], labels = all_predictions[2])
+      ap = metrics('ap', preds = all_predictions[0][:, 1], labels = all_predictions[2])
+
+      roc_auc2 = metrics('roc_auc', preds = train_fitted[0][:, 1], labels = train_fitted[2])
+      ap2 = metrics('ap', preds = train_fitted[0][:, 1], labels = train_fitted[2])
+
+      logger.info(f' Validation:\n\tAUROC: {roc_auc} \n\tAP: {ap}')
+
+      run_res = pd.DataFrame([roc_auc, ap,
+                      roc_auc2, ap2,
+                      cv_best_res[['mean_test_roc_auc']].iloc[0]['mean_test_roc_auc'],  cv_best_res[['mean_test_average_precision']].iloc[0]['mean_test_average_precision']])
+      run_res['metrics'] = ['auroc', 'auprc', 'auroc', 'auprc', 'auroc', 'auprc']
+      run_res['set'] = ['validation', 'validation', 'training_fitted', 'training_fitted', 'training', 'training']
+      run_res['data'] = name
+      run_res['PCA'] = config["do_pca"]
+      run_res['model_type'] = config["model_type"]
+      run_res['bert_model'] =  config["bert_model"]
+      run_res['cv_time'] = cv_time
+      run_res['X_shape'] = train['embeddings'].shape[1]
+      run_res['params'] = str(param_grid) # the parameter grid input
+      run_res['best_params'] = str(cv_best_res[['params']].iloc[0, 0])# the params for the best CV model
+      run_res['grids'] = str(grids) # sanity check that all parameters were actually passed into gridsearchcv
+
+      run_res.to_csv(os.path.join(config['out_dir'], '{}_results.csv'.format(name)))
+
+  elif config['model_type'] in nn_classifiers:
+
+      train_dataset = torch.utils.data.TensorDataset(torch.tensor(train['embeddings']), torch.tensor(train['labels']))
+      valid_dataset = torch.utils.data.TensorDataset(torch.tensor(valid['embeddings']), torch.tensor(valid['labels']))
+
+      # create torch dataloader 
+      train_loader = torch.utils.data.DataLoader(train_dataset, shuffle=False, batch_size=32)
+      valid_loader = torch.utils.data.DataLoader(valid_dataset, shuffle=False, batch_size=32)
+
+      classifier = nn_classifiers[model_type]
+      criterion = CrossEntropyLoss()
+
+      logger.info(classifier)
+
+      optimizer = optim.SGD(classifier.parameters(), lr=0.01, momentum=0.9)
+
+      for epoch in range(config['epochs']):
+
+          losses = 0.0
+
+          for i, (data, labels)  in enumerate(train_loader):
+
+              local_data, local_labels = data.to(device).float().unsqueeze(1), \
+                                         labels.to(device).type(torch.LongTensor)
 
 
-    # check prediction performance on the validation data 
-    correct = 0
-    total = 0
-    with torch.no_grad():
-        for data in reduced_valid_generator:
-            embeddings, labels = data
-            outputs = net(embeddings)
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
+              # 0-grad otherwise it sums up 
+              optimizer.zero_grad()
+              outputs = classifier(local_data)
+              loss = criterion(outputs, local_labels)
+              loss.backward()
+              optimizer.step()
 
-        logger.info(' Getting metrics...')
-        roc_auc = metrics('roc_auc', preds = all_predictions[1], labels = all_predictions[2])
-        ap = metrics('ap', preds = all_predictions[1], labels = all_predictions[2])
-        
-        logger.info(f'AUROC: {np.mean(roc_auc)} \nAP: {np.mean(ap)}')
+              losses += loss.item()
 
+          if epoch % 25 == 0: 
+              print(f'Epoch {epoch} loss: {loss}')
+
+      logger.info("Classifier Training Complete")
+
+      # save model
+      torch.save(classifier.state_dict(), name+"_pretrained_"+config['model_type']+'.p')
+
+      # check prediction performance on the validation data 
+      correct = 0
+      total = 0
+
+      with torch.no_grad():
+          for i, (data, labels)  in enumerate(valid_loader):
+              data, labels = data.to(device).float().unsqueeze(1), \
+                             labels.to(device).type(torch.LongTensor)
+              outputs = classifier(data)
+              _, predicted = torch.max(outputs.data, 1)
+              total += labels.size(0)
+              correct += (predicted == labels).sum().item()
+
+          logger.info(' Getting metrics...')
+          roc_auc = metrics('roc_auc', preds = predicted, labels = labels)
+          ap = metrics('ap', preds = predicted, labels = labels)
+
+          logger.info(f'AUROC: {np.mean(roc_auc)} \nAP: {np.mean(ap)}')
+          print(f'AUROC: {np.mean(roc_auc)} \nAP: {np.mean(ap)}')
+
+          run_res = pd.DataFrame([roc_auc, ap])
+          run_res['metrics'] = ['auroc', 'auprc']
+          run_res['set'] = ['validation', 'training']
+          run_res['data'] = name
+          run_res['PCA'] = config["do_pca"]
+          run_res['model_type'] = config["model_type"]
+          run_res['bert_model'] =  config["bert_model"]
+          run_res['cv_time'] = None
+          run_res['X_shape'] = train['embeddings'].shape[1]
+          run_res['params'] = None
+          run_res['best_params'] = None
+          run_res['grids'] = None
+
+          run_res.to_csv(os.path.join(config['out_dir'], '{}_results.csv'.format(name)))
+  else:
+      raise ValueError('Model not implemented yet')
 
 
 if __name__ == '__main__':
-    main()
+
+    # check cuda
+    use_cuda = torch.cuda.is_available()
+    device = torch.device("cuda:0" if use_cuda else "cpu")
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config_dir', help='path to the json config file')
+    parser.add_argument('--name', help='experiment name')
+
+    args = parser.parse_args()
+
+    main(args)
 
 
 
