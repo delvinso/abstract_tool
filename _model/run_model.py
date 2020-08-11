@@ -120,6 +120,8 @@ def train(config, name, logger, train, valid, shape):
         combined_df = pd.concat([train_df, val_df], axis = 0)
 
         combined_df.to_csv(os.path.join(config["out_dir"], '{}_preds.csv'.format(name)))
+        # save model
+        torch.save(classifier, name+"_pretrained_"+config['model_type']+'.p')
             
         # check prediction performance on the validation data
         logger.info(' Getting metrics...')
@@ -151,13 +153,23 @@ def train(config, name, logger, train, valid, shape):
         run_res.to_csv(os.path.join(config['out_dir'], '{}_results.csv'.format(name)))
 
     elif config['model_type'] in nn_classifiers:
+        
+        # convert ids to proper format 
+        train_id = torch.tensor([x[0].item() for x in train['ids']])
+        valid_id = torch.tensor([x[0].item() for x in valid['ids']])
 
-        train_dataset = torch.utils.data.TensorDataset(torch.tensor(train['embeddings']), torch.tensor(train['labels']))
-        valid_dataset = torch.utils.data.TensorDataset(torch.tensor(valid['embeddings']), torch.tensor(valid['labels']))
+        # add in IDs 
+        train_dataset = torch.utils.data.TensorDataset(torch.tensor(train['embeddings']), \
+                                                       torch.tensor(train['labels']), \
+                                                       train_id)
+
+        valid_dataset = torch.utils.data.TensorDataset(torch.tensor(valid['embeddings']), \
+                                                      torch.tensor(valid['labels']), \
+                                                      valid_id)
 
         # create torch dataloader 
-        train_loader = torch.utils.data.DataLoader(train_dataset, shuffle=False, batch_size=32)
-        valid_loader = torch.utils.data.DataLoader(valid_dataset, shuffle=False, batch_size=32)
+        train_loader = torch.utils.data.DataLoader(train_dataset, shuffle=True, batch_size=config['nn_train_batch_size'])
+        valid_loader = torch.utils.data.DataLoader(valid_dataset, shuffle=True, batch_size=config['nn_valid_batch_size'])
 
         classifier = nn_classifiers[model_type]
         criterion = CrossEntropyLoss()
@@ -170,7 +182,7 @@ def train(config, name, logger, train, valid, shape):
 
             losses = 0.0
 
-            for i, (data, labels)  in enumerate(train_loader):
+            for i, (data, labels, ids)  in enumerate(train_loader):
 
                 local_data, local_labels = data.to(device).float().unsqueeze(1), \
                                            labels.to(device).type(torch.LongTensor)
@@ -212,7 +224,7 @@ def train(config, name, logger, train, valid, shape):
             
             logger.info(f'AUROC: {np.mean(roc_auc)} \nAP: {np.mean(ap)}')
             print(f'AUROC: {np.mean(roc_auc)} \nAP: {np.mean(ap)}')
-
+        
             run_res = pd.DataFrame([roc_auc, ap])
             run_res['metrics'] = ['auroc', 'auprc']
             run_res['set'] = ['validation', 'training']

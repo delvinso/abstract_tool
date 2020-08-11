@@ -15,5 +15,7 @@
         "model_type": "cnn",
         "embedding_type": "bert",
         "precomputed_embedding_path": "",
-        "trained_classifier": ""
+        "trained_classifier": "",
+        "nn_valid_batch_size": 32,
+        "nn_train_batch_size": 32
  }

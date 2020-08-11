@@ -29,7 +29,6 @@ import torchtext
 
 # custom
 from AbstractDataset import AbstractDataset
-
 from AbstractBert import AbstractBert
 
 def load_data(config, vocab, proportion: float=0.7, max_len: int=256, partition: dict=None, labels: dict=None):
