@@ -228,3 +228,5 @@ def train(config, name, logger, train, valid, shape):
             run_res.to_csv(os.path.join(config['out_dir'], '{}_results.csv'.format(name)))
     else:
         raise ValueError('Model not implemented yet')
+    
+    return

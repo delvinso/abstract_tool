@@ -72,4 +72,3 @@ class AbstractBert(nn.Module):
         # else: 
 
         return pooled_output
-

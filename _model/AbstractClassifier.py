@@ -10,7 +10,7 @@ class AbstractClassifier(nn.Module):
             embedding_size (tuple): Tuple indicating embedding input size
         """        
         super(AbstractClassifier, self).__init__()
-
+        
         # CNN TODO: shape checks
         self.layer1 = nn.Sequential(
             nn.Conv1d(1, 20, kernel_size=2, stride=1),
@@ -42,5 +42,4 @@ class AbstractClassifier(nn.Module):
         out = self.fc2(out)
         
         return out
-
         

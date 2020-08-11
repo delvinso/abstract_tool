@@ -12,7 +12,9 @@ from torch.utils.data import TensorDataset, DataLoader, RandomSampler, Sequentia
 from torch.utils import data
 from sklearn import decomposition
 from keras.preprocessing.sequence import pad_sequences
+
 from sklearn.preprocessing import StandardScaler
+
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import precision_recall_curve, f1_score, roc_auc_score, auc, average_precision_score, precision_score, recall_score
 from transformers import *
@@ -27,10 +29,12 @@ import torchtext
 
 # custom
 from AbstractDataset import AbstractDataset
+
 from AbstractBert import AbstractBert
 
 def load_data(config, vocab, proportion: float=0.7, max_len: int=256, partition: dict=None, labels: dict=None):
     """Load data using PyTorch DataLoader.
+
     Keyword Arguments:
         config {string} -- config file containing data paths and tokenizer information
         metadata {bool} -- whether the data contains metadata for augmented embeddings
@@ -38,6 +42,7 @@ def load_data(config, vocab, proportion: float=0.7, max_len: int=256, partition:
         max_len {int} -- maximum token length for a text. (default: {128})
         partition {dict} -- maps lists of training and validation data IDs (default: {None})
         labels {dict} -- (default: {None})
+
     Returns:
         partition {dict} -- list of ids in train and valid datasets
         torch.utils.data.Dataset -- dataset
@@ -60,6 +65,7 @@ def load_data(config, vocab, proportion: float=0.7, max_len: int=256, partition:
     # below fix null values wrecking encode_plus
 
     # convert labels to integer and drop nas
+
     dataset.iloc[:, label_col] = pd.to_numeric(dataset.iloc[:, label_col], errors = 'coerce' )
     dataset = dataset[~ dataset[text_col].isnull()]
 
@@ -70,6 +76,7 @@ def load_data(config, vocab, proportion: float=0.7, max_len: int=256, partition:
     # create list of train/valid IDs if not provided
     if not partition and not labels:
         ids = list(dataset.iloc[:,unique_id_col])
+
         total_len = len(ids)
         np.random.shuffle(ids)
 
@@ -108,6 +115,7 @@ def load_data(config, vocab, proportion: float=0.7, max_len: int=256, partition:
     training_generator = DataLoader(training_set, **params)
 
     validation_set = AbstractDataset(data=valid_data, labels=labels, metadata=config['metadata'], list_IDs=partition['valid'])
+    
     validation_generator = DataLoader(validation_set, **params)
 
     return partition, training_generator, validation_generator
@@ -163,6 +171,7 @@ def load_embeddings(config, name, vocab, training_generator, validation_generato
         embedding_model.eval().to(device)
 
         logger.info(' Getting BERT embeddings...')
+
         train_embeddings = _get_bert_embeddings(training_generator, embedding_model, config["metadata"])
         valid_embeddings = _get_bert_embeddings(validation_generator, embedding_model, config["metadata"])
 
@@ -182,6 +191,7 @@ def _get_bert_embeddings(data_generator, embedding_model: torch.nn.Module, metad
     Arguments:
         data_generator {data.Dataset} -- dataloader generator (AbstractDataset).
         embedding_model {torch.nn.Module} -- embedding model. 
+
     Returns:
         embeddings {dict} -- dictionary containing ids, augmented embeddings, and labels. 
     """    
@@ -195,6 +205,7 @@ def _get_bert_embeddings(data_generator, embedding_model: torch.nn.Module, metad
                      }
         
         # get BERT training embeddings
+        
         if metadata:
             for local_ids, local_data, local_meta, local_labels in data_generator:
                 local_data, local_meta, local_labels =  local_data.to(device).long().squeeze(1), \
@@ -268,6 +279,7 @@ def get_pca_embeddings(config, name, training_embedding: dict, validation_embedd
     embedding_shape = len(train_embeddings['embeddings'][0])
 
     return embedding_shape, train_embeddings, valid_embeddings
+
 
 
 def metrics(metric_type: str, preds: list, labels: list):
