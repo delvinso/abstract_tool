@@ -39,6 +39,7 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (2048*2, rlimit[1]))
 TODO: Add augmented PCA
 TODO: ADD TEST FUNCTIONALITY 
 TODO: 1D CNN arch. -- test full model
+TODO: CNN --> set up hyperparams as config options
 TODO: clean up train function
 TODO: add option to load pretrained classifier
 TODO: add FCN
