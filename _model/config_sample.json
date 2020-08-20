@@ -1,0 +1,22 @@
+
+                {
+                  "train_file" : "cleaned_data/WASH_july_15.tsv",
+                  "metadata": false,
+                  "test_file": "",
+                  "epochs" : 300,
+                  "max_len" : 512,
+                  "seed" : 2020,
+                  "train": true,
+                  "test": false,
+                  "cache": "cache/",
+                  "pca_cache": "cache/pca_embeddings/",
+                  "out_dir":  "results/roberta_rf_false",
+                  "bert_model":"roberta",
+                  "do_pca": false,
+                  "model_type": "rf",
+                  "embedding_type": "roberta",
+                  "precomputed_embedding_path": "",
+                  "trained_classifier": "",
+                  "nn_valid_batch_size": 32,
+                  "nn_train_batch_size": 32
+                }

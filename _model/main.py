@@ -71,6 +71,8 @@ def main(args):
     else:
         raise logger.error(f"Neither train nor test mode activated.")
 
+    logging.info('Done!')
+
 
 def _set_logger(config, name):
     """ set up logging files """
@@ -103,18 +105,18 @@ def _get_data(config, logger, name):
     vocab = bert_models[config['bert_model']]
 
     # load data
-    partition, training_generator, validation_generator = load_data(config, vocab)
+    partition, training_generator, validation_generator = load_data(config, vocab, max_len = config['max_len'])
 
     # get the embeddings: either from scratch, or from cache
     logger.info(f" Getting {config['embedding_type']} embeddings ...")
     
-    if config['embedding_type'] == 'bert':
+    if (config['embedding_type'] == 'bert') | (config['embedding_type'] == 'roberta'):
         embed_shape, train_embeddings, valid_embeddings = load_embeddings(config, name, vocab, training_generator, validation_generator)
     elif config['embedding_type'] == 'specter':
         # load from filepath
         embed_shape, train_embeddings, valid_embeddings = pickle.load(os.path(config["precomputed_embedding_path"]))
     else:
-        raise logger.error("Only BERT and Specter embeddings accepted.")
+        raise logger.error("Only BERT, ROBERTA, and Specter embeddings accepted.")
 
     # dimension reduction: PCA (either from scratch, or from cache)
     if config["do_pca"]:

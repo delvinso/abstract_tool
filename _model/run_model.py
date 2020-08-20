@@ -134,6 +134,7 @@ def train(config, name, logger, train, valid, shape):
         ap2 = metrics('ap', preds = train_fitted[0][:, 1], labels = train_fitted[2])
 
         logger.info(f' Validation:\n\tAUROC: {roc_auc} \n\tAP: {ap}')
+        embed_shape = np.array(train['embeddings']).shape
 
         run_res = pd.DataFrame([roc_auc, ap,
                         roc_auc2, ap2,
@@ -145,7 +146,8 @@ def train(config, name, logger, train, valid, shape):
         run_res['model_type'] = config["model_type"]
         run_res['bert_model'] =  config["bert_model"]
         run_res['cv_time'] = cv_time
-        run_res['X_shape'] = train['embeddings'].shape[1]
+        run_res['num_vars_train'] = embed_shape[1]
+        run_res['num_obs_train'] = embed_shape[0]
         run_res['params'] = str(param_grid) # the parameter grid input
         run_res['best_params'] = str(cv_best_res[['params']].iloc[0, 0])# the params for the best CV model
         run_res['grids'] = str(grids) # sanity check that all parameters were actually passed into gridsearchcv

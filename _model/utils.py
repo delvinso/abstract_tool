@@ -58,9 +58,10 @@ def load_data(config, vocab, proportion: float=0.7, max_len: int=256, partition:
     else: 
         unique_id_col = 0
         text_col = 1
-        label_col = 2
+        label_col = 3
 
     dataset = pd.read_csv(config['train_file'], header=None, sep='\t')
+    print(dataset)
     # below fix null values wrecking encode_plus
 
     # convert labels to integer and drop nas
@@ -71,6 +72,8 @@ def load_data(config, vocab, proportion: float=0.7, max_len: int=256, partition:
     # recreate the first column with the reset index.
     dataset = dataset[(dataset.iloc[:, label_col] == 1) | (dataset.iloc[:, label_col] == 0)] \
         .reset_index().reset_index().drop(columns = ['index', 0]).rename(columns = {'level_0': 0})
+
+    print(dataset)
 
     # create list of train/valid IDs if not provided
     if not partition and not labels:
@@ -110,10 +113,10 @@ def load_data(config, vocab, proportion: float=0.7, max_len: int=256, partition:
     valid_data = dataset[dataset[unique_id_col].isin(partition['valid'])]
 
     # create train/valid generators
-    training_set = AbstractDataset(data=train_data, labels=labels, metadata=config['metadata'], list_IDs=partition['train'])
+    training_set = AbstractDataset(data=train_data, labels=labels, metadata=config['metadata'], list_IDs=partition['train'], max_len = max_len)
     training_generator = DataLoader(training_set, **params)
 
-    validation_set = AbstractDataset(data=valid_data, labels=labels, metadata=config['metadata'], list_IDs=partition['valid'])
+    validation_set = AbstractDataset(data=valid_data, labels=labels, metadata=config['metadata'], list_IDs=partition['valid'],max_len = max_len)
     
     validation_generator = DataLoader(validation_set, **params)
 
@@ -147,13 +150,20 @@ def load_embeddings(config, name, vocab, training_generator, validation_generato
         validation_generator -- 
     Returns:
         embedding_shape, train_embeddings, valid_embeddings
-    """   
+    """
 
-    if os.listdir(config['cache']+"/"+name):
-        with open(config['cache']+name+'_training_embeddings.p', 'rb') as cache:
+    # Pickle embeddings should be AGNOSTIC to the name. This is because each pickled embedding is specific to the dataset and transformer.
+    # Applies down the road when/if we attempt active learning
+    data_name =  config['train_file'].split('/')[-1][:-4] # retrieve file name without the extension
+    train_embed_pkl_f = os.path.join(config['cache'], data_name + '_' + config['embedding_type'] + '_training_embeddings.p')
+    valid_embed_pkl_f = os.path.join(config['cache'], data_name + '_' + config['embedding_type'] + '_validation_embeddings.p')
+    
+    
+    if os.path.exists(train_embed_pkl_f):
+        with open( train_embed_pkl_f, 'rb') as cache:
             train_embeddings = pickle.load(cache)
 
-        with open(config['cache']+name+'_validation_embeddings.p', 'rb') as cache:
+        with open(valid_embed_pkl_f, 'rb') as cache:
             valid_embeddings = pickle.load(cache)
     else:
         # get embeddings from scratch
@@ -162,23 +172,23 @@ def load_embeddings(config, name, vocab, training_generator, validation_generato
 
         if torch.cuda.device_count() > 1:
             print("GPUs Available: ", torch.cuda.device_count())
-            embedding_model = torch.nn.DataParallel(model, device_ids=[0, 1, 2])
+            embedding_model = torch.nn.DataParallel(embedding_model, device_ids=[0, 1, 2])
        
         use_cuda = torch.cuda.is_available()
         device = torch.device("cuda:0" if use_cuda else "cpu")
 
         embedding_model.eval().to(device)
 
-        logger.info(' Getting BERT embeddings...')
+        logger.info(' Getting BERT/ROBERTA embeddings...')
 
         train_embeddings = _get_bert_embeddings(training_generator, embedding_model, config["metadata"])
         valid_embeddings = _get_bert_embeddings(validation_generator, embedding_model, config["metadata"])
 
         # save embeddings
-        pickle.dump(train_embeddings, open(config['cache']+name+'_training_embeddings.p', 'wb'))
-        pickle.dump(valid_embeddings, open(config['cache']+name+'_validation_embeddings.p', 'wb'))
+        pickle.dump(train_embeddings, open(train_embed_pkl_f, 'wb'))
+        pickle.dump(valid_embeddings, open(valid_embed_pkl_f, 'wb'))
 
-        logger.info(' Saved full BERT embeddings.')
+        logger.info(' Saved full BERT/ROBERTA embeddings.')
 
     embedding_shape = train_embeddings['embeddings'][1].shape[0]
 
@@ -211,19 +221,20 @@ def _get_bert_embeddings(data_generator, embedding_model: torch.nn.Module, metad
                                                         local_meta, \
                                                         local_labels.to(device).long()
 
+                #print(local_data[0].shape)
                 augmented_embeddings = embedding_model(local_data, local_meta)
 
-                embeddings['ids'] = local_ids
+                embeddings['ids'].extend(np.array(local_ids))
                 embeddings['embeddings'].extend(np.array(augmented_embeddings.detach().cpu()))
                 embeddings['labels'].extend(np.array(local_labels.detach().cpu().tolist()))
         else:
             for local_ids, local_data, local_labels in data_generator:
                 local_data, local_labels =  local_data.to(device).long().squeeze(1), \
                                                 local_labels.to(device).long()
-
+                #print(local_data[0].shape)
                 augmented_embeddings = embedding_model(local_data)
 
-                embeddings['ids'] = local_ids
+                embeddings['ids'].extend(np.array(local_ids))
                 embeddings['embeddings'].extend(np.array(augmented_embeddings.detach().cpu()))
                 embeddings['labels'].extend(np.array(local_labels.detach().cpu().tolist()))
     
@@ -238,18 +249,18 @@ def get_pca_embeddings(config, name, training_embedding: dict, validation_embedd
     Returns:
         generator -- Torch Dataloader
         tuple -- shape of embedding
-    """    
-    params = {'batch_size': 32,
-              'shuffle': False,
-              'num_workers': 0
-              }
+    """
 
-    if os.listdir(config['pca_cache']):
+    data_name =  config['train_file'].split('/')[-1][:-4] # retrieve file name without the extension
+    train_pca_pkl_f = os.path.join(config['pca_cache'], data_name + '_' + config['embedding_type'] + '_training_embeddings.p')
+    valid_pca_pkl_f = os.path.join(config['pca_cache'], data_name + '_' + config['embedding_type'] + '_validation_embeddings.p')
+
+    if os.path.exists(train_pca_pkl_f):
         logger.info(" Loading PCA-embeddings from cache ")
-        with open(config['pca_cache']+name+'_pca_train_embeddings.p', 'rb') as cache:
+        with open(train_pca_pkl_f , 'rb') as cache:
             train_embeddings = pickle.load(cache)
 
-        with open(config['pca_cache']+name+'_pca_valid_embeddings.p', 'rb') as cache:
+        with open(valid_pca_pkl_f, 'rb') as cache:
             valid_embeddings = pickle.load(cache)
     else:
         logger.info(' Standardizing ')
@@ -260,7 +271,7 @@ def get_pca_embeddings(config, name, training_embedding: dict, validation_embedd
 
         # Dimension reduction: PCA or UMAP (?)
         logger.info(' Doing PCA...')
-        pca_model = decomposition.PCA(n_components = 0.99) # this can be a parameter down the road, but for debugging it's fine
+        pca_model = decomposition.PCA(n_components = 0.90) # this can be a parameter down the road, but for debugging it's fine
         train_reduc = pca_model.fit_transform(train_embed_ss)
         val_reduc = pca_model.transform(valid_embed_ss)
 
@@ -272,8 +283,8 @@ def get_pca_embeddings(config, name, training_embedding: dict, validation_embedd
         valid_embeddings = validation_embedding.copy()
 
         # save embeddings
-        pickle.dump(train_embeddings, open(config['cache']+name+"/"+name+'_pca_train_embeddings.p', 'wb'))
-        pickle.dump(valid_embeddings, open(config['cache']+name+"/"+name+'_pca_valid_embeddings.p', 'wb'))
+        pickle.dump(train_embeddings, open(train_pca_pkl_f, 'wb'))
+        pickle.dump(valid_embeddings, open(valid_pca_pkl_f, 'wb'))
 
     embedding_shape = len(train_embeddings['embeddings'][0])
 

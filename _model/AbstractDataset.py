@@ -37,9 +37,9 @@ class AbstractDataset(data.Dataset):
       Y = self.data[self.data[0] == ID][2].values.tolist()
       z = self.labels[ID]
 
-      return self.list_IDs, torch.tensor(X[0]['input_ids']), Y, torch.tensor(z) 
+      return ID, torch.tensor(X[0]['input_ids']), Y, torch.tensor(z)
 
     else: 
       y = self.labels[ID]
 
-      return self.list_IDs, torch.tensor(X[0]['input_ids']), torch.tensor(y) 
+      return ID, torch.tensor(X[0]['input_ids']), torch.tensor(y)
